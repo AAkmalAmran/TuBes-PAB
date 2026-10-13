@@ -1,8 +1,8 @@
-# Product Requirement Document (PRD) — v2.0 (Revised)
+# Product Requirement Document (PRD) — v3.0 (Offline-First)
 
-## FinQuest: Pahlawan Finansial (Mobile Application Final Project)
+## FinQuest: Pahlawan Finansial (Mobile Application)
 
-> **Revision summary (v1.0 → v2.0):** added State Ownership & Constructor Contracts (§5), a concrete Game Rules table (§6), anti-spam rule for news buff, `FutureBuilder` caching rule, Profile layout fix, complete network error handling, project setup (`flutter create`, INTERNET permission, assets, API key handling), input validation, and testable acceptance criteria. Data models in §4 are **unchanged** from v1.0.
+> **Revision summary (v2.0 → v3.0):** the app is now designed as a **real, usable, offline-first application**. Finance records and game progress are persisted in a local SQLite database (`sqflite` + `path`). Internet is required **only** for the Daily Mission (reading news articles). Changes: guardrails #2/#4 relaxed for `sqflite` + `path` (§2), new persistence layer (§5), async callbacks and crash-safe write-through (§6), real daily mission with persistent claims, daily quota and reading gate (§7.5, §8.5), profile totals via SQL aggregates, and new acceptance tests for persistence and offline behavior (§12). Data models in §4 remain **unchanged**.
 
 ---
 
@@ -11,9 +11,11 @@
 * **Application Name:** FinQuest: Pahlawan Finansial
 * **Platform:** Flutter (Target: Android & iOS)
 * **Category:** Gamified Personal Finance & Financial Literacy
-* **Objective:** Help university students and young adults manage expenses and build consistent saving habits through an RPG battle simulation against spendthrift habits ("Monster Boros"), powered by financial news literacy quests via external API integration.
-* **Academic Context:** Mobile Programming Final Term Project (Tugas Besar). Core assessment focuses on foundational-to-intermediate widget architecture, overflow-resilient layout handling, asynchronous external REST API consumption, and Material 3 design patterns.
-* **Out of Scope:** user accounts, authentication, persistence across app restarts (all state is in-memory and resets on app restart — this is intentional), push notifications, multi-language switching.
+* **Objective:** Help university students and young adults manage expenses and build consistent saving habits through an RPG battle simulation against spendthrift habits ("Monster Boros"). Daily financial-news reading quests give attack buffs.
+* **Offline-first principle:** logging savings/expenses, fighting monsters, and viewing the profile MUST work with **zero internet connectivity**. Only the **Quest** tab needs the network (to fetch articles). A network failure must never block or crash any other feature.
+* **Persistence:** all user data survives app restarts and phone reboots (local SQLite).
+* **Academic Context:** Mobile Programming Final Term Project (Tugas Besar). Assessment focuses on widget architecture, overflow-resilient layouts, asynchronous REST API consumption, local database usage, and Material 3.
+* **Out of Scope (this version):** user accounts, cloud sync/backup, edit or delete of transactions, push notifications, web/desktop targets (`sqflite` supports Android/iOS only), multi-language switching.
 
 ---
 
@@ -23,35 +25,45 @@
 >
 > 1. **NO Third-Party State Management**
 >    * **FORBIDDEN:** `bloc`, `flutter_bloc`, `provider`, `riverpod`, `get`, `mobx`.
->    * **REQUIRED:** vanilla Flutter only: `StatefulWidget` + `setState()`, and constructor callbacks. Shared state is owned by `MainNavigationScreen` (see §5).
->    * Also FORBIDDEN: `InheritedWidget`/`ChangeNotifier`/`ValueNotifier` as a shared-state mechanism, and global mutable variables or singletons.
+>    * **REQUIRED:** vanilla Flutter only: `StatefulWidget` + `setState()` and constructor callbacks. Shared state is owned by `MainNavigationScreen` (§6).
+>    * Also FORBIDDEN as shared-state mechanisms: `InheritedWidget`, `ChangeNotifier`, `ValueNotifier`, global mutable variables.
 >
-> 2. **NO Heavy Local Databases / Backends**
->    * **FORBIDDEN:** `hive`, `isar`, `sqflite`, `drift`, `shared_preferences`, `firebase_*`, `supabase_*`.
->    * **REQUIRED:** in-memory state only.
+> 2. **Local Persistence: SQLite ONLY**
+>    * **ALLOWED:** `sqflite` and `path`.
+>    * **FORBIDDEN:** `hive`, `isar`, `drift`, `objectbox`, `sembast`, `shared_preferences`, `firebase_*`, `supabase_*`, or any other storage mechanism (including writing JSON/text files by hand).
+>    * Only `lib/services/database_helper.dart` may import `sqflite`/`path`. Only `MainNavigationScreen` may call `DatabaseHelper`. Screens and widgets NEVER touch the database directly.
+>    * `DatabaseHelper` may be a singleton (it is a connection holder, not shared game state).
 >
 > 3. **Strict Directory Adherence**
->    * Do NOT create files or directories outside the project tree in §3.
->    * **Allowed exceptions (generated or platform files):** `android/`, `ios/`, `test/`, `.gitignore`, and editing `android/app/src/main/AndroidManifest.xml` (INTERNET permission only, see §8).
+>    * Do NOT create files or directories outside the tree in §3.
+>    * **Allowed exceptions (generated/platform files):** `android/`, `ios/`, `test/`, `.gitignore`, and editing `android/app/src/main/AndroidManifest.xml` (INTERNET permission only, §10).
+>    * Never commit the generated `.db` file.
 >
 > 4. **Locked Dependencies**
->    * Only `flutter`, `http`, and `intl`. No extra packages without explicit request.
->    * `dart:io`, `dart:async`, `dart:convert`, and `package:flutter/services.dart` (e.g. `FilteringTextInputFormatter`) are part of the SDK and ARE allowed.
+>    * Only `flutter`, `http`, `intl`, `sqflite`, `path`. No extra packages without explicit request.
+>    * SDK libraries (`dart:io`, `dart:async`, `dart:convert`, `package:flutter/services.dart`) are allowed.
 >
 > 5. **Zero Layout Overflow Policy**
->    * Any screen containing a `TextField` **MUST** be wrapped in a `SingleChildScrollView` (or other scrollable) so the software keyboard never causes `A RenderFlex overflowed by x pixels`.
->    * Never place a `ListView`/`GridView` inside a `SingleChildScrollView` without `shrinkWrap: true` + `NeverScrollableScrollPhysics()`, or use a plain `Column` instead.
+>    * Any screen containing a `TextField` **MUST** be wrapped in a `SingleChildScrollView` (or other scrollable).
+>    * Never place a `ListView`/`GridView` inside a `SingleChildScrollView` without `shrinkWrap: true` + `NeverScrollableScrollPhysics()` (or use a plain `Column`).
 >    * Never place a scrollable inside a `Column` without `Expanded`/`SizedBox` bounds.
 >
 > 6. **Localization / UI Text Language**
->    * Code, comments, models, variable names, and logic MUST be in English.
+>    * Code, comments, models, variable names, **and database table/column names** MUST be in English.
 >    * User-facing UI labels, monster names, dialogs, SnackBars, and error messages MUST be in Indonesian (e.g. *"Monster Kopi Susu Mahal"*, *"Catat Tabungan"*, *"Rp "*).
 >
 > 7. **Do Not Change Contracts**
->    * Do NOT rename or alter the models (§4), the constructor signatures (§5), or the constants (§6). If a change is needed, update this PRD first and notify the team.
+>    * Do NOT rename or alter models (§4), the database schema (§5.1), constructor signatures (§6.3), or constants (§7). If a change is needed, update this PRD first and notify the team.
 >
 > 8. **Secrets**
->    * NEVER commit a real API key. Use `--dart-define` (see §8).
+>    * NEVER commit a real API key. Use `--dart-define` (§10).
+>
+> 9. **Offline-First Rule**
+>    * Only `QuestScreen` and `NewsService` may use the network. The app MUST start and be fully playable in airplane mode. Never `await` a network call during startup.
+>
+> 10. **Data Integrity Rule**
+>     * Every change that touches more than one table MUST run inside a single `db.transaction(...)`.
+>     * **Write-through order:** compute new values → `await` the database write → only then `setState()` to update memory. If the database write throws, memory and UI stay unchanged and a SnackBar *"Gagal menyimpan data. Coba lagi."* is shown.
 
 ### Official Dependencies (`pubspec.yaml`)
 
@@ -67,7 +79,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.2.0        # External REST API calls to NewsAPI
+  sqflite: ^2.3.0     # Local offline SQLite database
+  path: ^1.9.0        # Builds the local database file path
+  http: ^1.2.0        # REST API calls to NewsAPI (Quest only)
   intl: ^0.19.0       # Indonesian Rupiah currency and date formatting
 
 dev_dependencies:
@@ -80,6 +94,8 @@ flutter:
   assets:
     - assets/images/
 ```
+
+> If `flutter pub get` reports a version conflict (e.g. on `path`), use `flutter pub add sqflite path` to let Flutter pick compatible versions, then update this PRD.
 
 ---
 
@@ -100,17 +116,19 @@ finquest/
 │   │   ├── constants/
 │   │   │   ├── api_endpoints.dart
 │   │   │   ├── app_colors.dart
-│   │   │   └── game_rules.dart      # NEW: all game numbers in one place
+│   │   │   └── game_rules.dart
 │   │   ├── theme/
 │   │   │   └── app_theme.dart
 │   │   └── utils/
-│   │       └── formatters.dart      # NEW: Rupiah + date formatting helpers
+│   │       └── formatters.dart
 │   ├── models/
 │   │   ├── monster.dart
 │   │   ├── character.dart
 │   │   ├── transaction_record.dart
-│   │   └── article.dart
+│   │   ├── article.dart
+│   │   └── game_results.dart        # NEW: SavingResult, ArticleClaimResult
 │   ├── services/
+│   │   ├── database_helper.dart     # NEW: all SQLite access
 │   │   └── news_service.dart
 │   ├── screens/
 │   │   ├── main_navigation_screen.dart
@@ -122,7 +140,8 @@ finquest/
 │   │   ├── quest/
 │   │   │   ├── quest_screen.dart
 │   │   │   └── widgets/
-│   │   │       └── news_card.dart
+│   │   │       ├── news_card.dart
+│   │   │       └── article_reader_sheet.dart   # NEW: reading gate
 │   │   └── profile/
 │   │       └── profile_screen.dart
 │   └── widgets/
@@ -134,6 +153,8 @@ finquest/
 ---
 
 ## 4. Data Contract & Model Definitions (UNCHANGED)
+
+> Models stay plain Dart classes. **No `toMap`/`fromMap` inside models**: the mapping between models and database rows lives in `database_helper.dart` (§5.2).
 
 ### 4.1. `lib/models/monster.dart`
 
@@ -232,27 +253,174 @@ class Article {
 }
 ```
 
----
+### 4.5. `lib/models/game_results.dart` (NEW)
 
-## 5. State Ownership & Constructor Contracts (NEW)
-
-### 5.1. Principle
-
-All shared state lives in **`_MainNavigationScreenState`** (lifting state up). Child screens receive data via constructor and request changes via callbacks. Children NEVER mutate shared objects directly; they call a callback and the parent mutates inside `setState()`.
-
-### 5.2. State owned by `MainNavigationScreen`
+Result objects returned by parent callbacks so child screens can show the right feedback without touching shared state.
 
 ```dart
-int _currentIndex = 0;
-final Character _character = Character(name: 'Pahlawan Hemat');
-late List<Monster> _monsters = _createMonsters();
-int _monsterIndex = 0;
-bool _isAdventureComplete = false;
-final List<TransactionRecord> _transactions = [];
-final Set<String> _claimedArticleUrls = {};
+class SavingResult {
+  final int damage;                    // total damage dealt (base + buff)
+  final bool leveledUp;
+  final int newLevel;
+  final String? defeatedMonsterName;   // non-null if this attack defeated the monster
+  final bool adventureCompleted;       // true if the defeated monster was the last one
+
+  SavingResult({
+    required this.damage,
+    required this.leveledUp,
+    required this.newLevel,
+    this.defeatedMonsterName,
+    this.adventureCompleted = false,
+  });
+}
+
+enum ArticleClaimResult { granted, alreadyClaimed, dailyLimitReached, buffAtMax }
 ```
 
-`_createMonsters()` returns the three monsters in this order (HP values from §6.1):
+---
+
+## 5. Persistence Layer (NEW)
+
+### 5.1. Database schema (`finquest.db`, version 1)
+
+All identifiers in English. Booleans are stored as `INTEGER` (0/1), dates as ISO-8601 `TEXT`.
+
+```sql
+CREATE TABLE character (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),   -- single row
+  name        TEXT    NOT NULL,
+  gold        INTEGER NOT NULL DEFAULT 0,
+  exp         INTEGER NOT NULL DEFAULT 0,
+  level       INTEGER NOT NULL DEFAULT 1,
+  attack_buff INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE monsters (
+  id                TEXT    PRIMARY KEY,              -- 'kopi' | 'belanja' | 'ongkir'
+  name              TEXT    NOT NULL,
+  max_hp            INTEGER NOT NULL,
+  current_hp        INTEGER NOT NULL,
+  asset_image_path  TEXT    NOT NULL,
+  sort_order        INTEGER NOT NULL                  -- 0, 1, 2
+);
+
+CREATE TABLE game_state (
+  id                      INTEGER PRIMARY KEY CHECK (id = 1),   -- single row
+  current_monster_index   INTEGER NOT NULL DEFAULT 0,
+  is_adventure_complete   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE transactions (
+  id           TEXT PRIMARY KEY,
+  description  TEXT NOT NULL,
+  amount       REAL NOT NULL,
+  type         TEXT NOT NULL CHECK (type IN ('expense', 'saving')),
+  date         TEXT NOT NULL                          -- ISO-8601
+);
+CREATE INDEX idx_transactions_date ON transactions (date DESC);
+
+CREATE TABLE claimed_articles (
+  url            TEXT PRIMARY KEY,                    -- an article can be claimed only once, ever
+  claimed_date   TEXT NOT NULL                        -- local day 'yyyy-MM-dd', used for the daily quota
+);
+```
+
+**Seeding (`onCreate`):** insert the character row (`name: 'Pahlawan Hemat'`, all zeros, level 1), the three monsters from `DatabaseHelper.defaultMonsters()` (§6.2), and `game_state` (`0`, `0`).
+
+**Migrations:** `version: 1` with an `onUpgrade` stub. Any future schema change bumps the version and adds an `ALTER TABLE` step; never delete user data on upgrade.
+
+> Note: v3.0 has no "category" column. `TransactionRecord` (locked in §4.3) has no category; adding one requires a PRD change to the model first.
+
+### 5.2. `lib/services/database_helper.dart`
+
+Responsibilities: open/create the DB, map rows ↔ models, and expose exactly these methods:
+
+```dart
+class GameSnapshot {
+  final Character character;
+  final List<Monster> monsters;               // ordered by sort_order
+  final int currentMonsterIndex;
+  final bool isAdventureComplete;
+  final List<TransactionRecord> recentTransactions; // newest first, LIMIT 100
+  final double totalSaving;                    // SQL SUM over ALL saving rows
+  final double totalExpense;                   // SQL SUM over ALL expense rows
+  final Map<String, String> claimedArticles;   // url -> claimed_date
+  // constructor with all fields required
+}
+
+class DatabaseHelper {
+  static final DatabaseHelper instance = DatabaseHelper._();
+  DatabaseHelper._();
+
+  static List<Monster> defaultMonsters();                     // fresh monsters at full HP (table in §6.2)
+
+  Future<GameSnapshot> loadSnapshot();
+
+  // One transaction: update character row, update the given monster row,
+  // update game_state, and insert [record].
+  Future<void> persistTurn({
+    required Character character,
+    required Monster monster,
+    required int currentMonsterIndex,
+    required bool isAdventureComplete,
+    required TransactionRecord record,
+  });
+
+  // One transaction: insert into claimed_articles and update character.attack_buff.
+  Future<void> persistArticleClaim({
+    required String url,
+    required String claimedDate,
+    required Character character,
+  });
+
+  // One transaction: reset all monsters to max_hp, reset game_state.
+  // Character, transactions and claimed_articles are kept.
+  Future<void> restartAdventure();
+}
+```
+
+Implementation requirements:
+
+* Open once and cache the `Future<Database>` (guard against concurrent opens): `join(await getDatabasesPath(), 'finquest.db')`.
+* Use parameterized `db.insert/update/query` (or `?` placeholders). Never build SQL by string interpolation of user input (description text).
+* `TransactionRecord.type` is stored as `type.name` and parsed with `TransactionType.values.byName`.
+* Totals: `SELECT type, SUM(amount) AS total FROM transactions GROUP BY type`; missing type → `0`.
+* Recent list: `ORDER BY date DESC LIMIT 100`.
+
+### 5.3. Startup flow
+
+1. `main()` → `WidgetsFlutterBinding.ensureInitialized()` → `await initializeDateFormatting('id_ID')` → `runApp`. No network calls.
+2. `MainNavigationScreen.initState()` calls `_loadSnapshot()` (`DatabaseHelper.instance.loadSnapshot()`), starting with `_isLoading = true`.
+3. While loading: `Scaffold` with centered `CircularProgressIndicator`.
+4. On failure: centered message *"Gagal memuat data. Coba lagi."* + **"Coba Lagi"** button that re-runs `_loadSnapshot()`.
+5. On success: fill the in-memory state (§6.2) and show the `NavigationBar` + `IndexedStack`.
+
+---
+
+## 6. State Ownership & Constructor Contracts
+
+### 6.1. Principle
+
+SQLite is the **source of truth**. `MainNavigationScreen` holds an **in-memory copy** (loaded at startup) and keeps it in sync through the write-through rule (guardrail #10). Child screens receive data via constructors and request changes via **async callbacks**; they never mutate shared objects and never call the database.
+
+### 6.2. State owned by `_MainNavigationScreenState`
+
+```dart
+bool _isLoading = true;
+bool _hasLoadError = false;
+int _currentIndex = 0;
+
+late Character _character;
+late List<Monster> _monsters;
+late int _monsterIndex;
+late bool _isAdventureComplete;
+late List<TransactionRecord> _recentTransactions; // newest first, max 100
+late double _totalSaving;
+late double _totalExpense;
+late Map<String, String> _claimedArticles;        // url -> 'yyyy-MM-dd'
+```
+
+`DatabaseHelper.defaultMonsters()` (used for seeding and restart), in this fixed order:
 
 | # | id | name (UI) | maxHp | asset |
 |---|---|---|---|---|
@@ -262,18 +430,17 @@ final Set<String> _claimedArticleUrls = {};
 
 `currentHp` starts equal to `maxHp`.
 
-### 5.3. Constructor signatures (MUST be followed exactly)
+### 6.3. Constructor signatures (MUST be followed exactly)
 
 ```dart
 // lib/screens/arena/arena_screen.dart  (StatelessWidget)
 ArenaScreen({
   required Character character,
   required Monster monster,                  // current monster
-  required bool isAdventureComplete,         // true after the 3rd monster is defeated
-  required int Function(double amount, String description) onSaving,   // returns damage dealt
-  required int Function(double amount, String description) onExpense,  // returns HP healed by monster
-  required VoidCallback onNextMonster,       // called after the victory dialog is closed
-  required VoidCallback onRestartAdventure,  // resets monsters, keeps character & transactions
+  required bool isAdventureComplete,
+  required Future<SavingResult?> Function(double amount, String description) onSaving,   // null = DB error
+  required Future<int?> Function(double amount, String description) onExpense,           // HP healed, null = DB error
+  required Future<void> Function() onRestartAdventure,
 })
 
 // lib/screens/arena/widgets/monster_display.dart  (StatelessWidget)
@@ -281,45 +448,66 @@ MonsterDisplay({ required Monster monster })
 
 // lib/screens/arena/widgets/attack_form.dart  (StatefulWidget, owns TextEditingControllers)
 AttackForm({
-  required void Function(double amount, String description) onSaving,
-  required void Function(double amount, String description) onExpense,
+  required Future<void> Function(double amount, String description) onSaving,
+  required Future<void> Function(double amount, String description) onExpense,
 })
 
 // lib/screens/quest/quest_screen.dart  (StatefulWidget, owns the cached Future)
 QuestScreen({
   required Character character,
   required Set<String> claimedArticleUrls,
-  required bool Function(Article article) onArticleRead,  // returns true if buff was granted
+  required int claimsToday,                                   // claims made on the current local day
+  required Future<ArticleClaimResult> Function(Article article) onArticleRead,
 })
 
 // lib/screens/quest/widgets/news_card.dart  (StatelessWidget)
-NewsCard({
+NewsCard({ required Article article, required bool isClaimed, required VoidCallback onTap })
+
+// lib/screens/quest/widgets/article_reader_sheet.dart  (StatefulWidget, owns the countdown Timer)
+ArticleReaderSheet({
   required Article article,
   required bool isClaimed,
-  required VoidCallback onTap,
+  required VoidCallback onClaim,
 })
 
 // lib/screens/profile/profile_screen.dart  (StatelessWidget)
 ProfileScreen({
   required Character character,
-  required List<TransactionRecord> transactions,
+  required List<TransactionRecord> recentTransactions,   // latest 100
+  required double totalSaving,
+  required double totalExpense,
 })
 
 // lib/widgets/hp_bar.dart  (StatelessWidget)
 HpBar({ required int currentHp, required int maxHp })
 ```
 
-### 5.4. Parent logic (owned by `MainNavigationScreen`)
+Because `AttackForm` and the Arena callbacks are asynchronous, `AttackForm` MUST keep a `_isSubmitting` flag: both buttons are disabled while a callback is pending (prevents double-tap duplicates). After every `await`, check `mounted`/`context.mounted` before using `context`.
 
-* **`onSaving(amount, description)`** — inside `setState`: apply §6.2 damage rules, update EXP/Gold/Level, reset `attackBuff` to 0, add a `TransactionRecord(type: saving)`. Returns the damage dealt. If `monster.isDefeated` afterwards, the monster stays as the current one until `onNextMonster` is called (the Arena reads `monster.isDefeated` right after the callback returns, since the same object was mutated synchronously).
-* **`onExpense(amount, description)`** — inside `setState`: heal the monster per §6.3, add a `TransactionRecord(type: expense)`. Returns HP healed.
-* **`onNextMonster()`** — inside `setState`: award victory bonus (§6.4); if `_monsterIndex < _monsters.length - 1` then `_monsterIndex++`, else `_isAdventureComplete = true`.
-* **`onRestartAdventure()`** — inside `setState`: `_monsters = _createMonsters()`, `_monsterIndex = 0`, `_isAdventureComplete = false`. Character and transactions are kept.
-* **`onArticleRead(article)`** — inside `setState`: if `_claimedArticleUrls` contains `article.url` or `attackBuff >= GameRules.maxAttackBuff`, return `false`; otherwise add the URL, `attackBuff += GameRules.articleBuff`, return `true`.
+### 6.4. Parent callback logic (owned by `MainNavigationScreen`)
+
+All callbacks follow: **compute on local copies → `await` DB → `if (!mounted) return` → `setState` to apply**. Wrap the DB call in `try/catch`; on error show the *"Gagal menyimpan data. Coba lagi."* SnackBar and return `null`.
+
+* **`onSaving(amount, description)`**
+  1. If `_isAdventureComplete`, do nothing and return `null`.
+  2. Compute per §7.2: damage, new HP, gold, exp, level. If new HP is 0 → also apply victory bonus (§7.4) to gold/exp, recompute level, and decide the next state: `_monsterIndex + 1` if not last, otherwise `isAdventureComplete = true` (index stays at the last monster).
+  3. Build `TransactionRecord(id: DateTime.now().microsecondsSinceEpoch.toString(), description, amount, type: saving, date: DateTime.now())`.
+  4. `await DatabaseHelper.instance.persistTurn(...)`.
+  5. `setState`: apply values to `_character` and the monster, set index/complete flag, `_recentTransactions.insert(0, record)` (trim to 100), `_totalSaving += amount`.
+  6. Return `SavingResult` (with `defeatedMonsterName` and `adventureCompleted` when applicable).
+* **`onExpense(amount, description)`**: same pattern with §7.3 (monster heals, character unchanged), `_totalExpense += amount`; returns HP healed. Ignored if `_isAdventureComplete`.
+* **`onRestartAdventure()`**: `await restartAdventure()`, then `setState`: `_monsters = DatabaseHelper.defaultMonsters()`, `_monsterIndex = 0`, `_isAdventureComplete = false`.
+* **`onArticleRead(article)`**, evaluated in this exact order:
+  1. `today = DateFormat('yyyy-MM-dd').format(DateTime.now())`.
+  2. URL already in `_claimedArticles` → `alreadyClaimed`.
+  3. Claims with `claimed_date == today` ≥ `GameRules.dailyArticleQuota` → `dailyLimitReached`.
+  4. `attackBuff >= GameRules.maxAttackBuff` → `buffAtMax`.
+  5. Otherwise: `await persistArticleClaim(...)` (new buff = old + `articleBuff`), then `setState` (update buff, add to `_claimedArticles`) → `granted`.
+* When building `QuestScreen`, pass `claimsToday` computed from `_claimedArticles` for today's date, and `claimedArticleUrls: _claimedArticles.keys.toSet()`.
 
 ---
 
-## 6. Game Rules (NEW)
+## 7. Game Rules
 
 All numbers live in `lib/core/constants/game_rules.dart` and MUST NOT be hardcoded elsewhere.
 
@@ -333,55 +521,58 @@ class GameRules {
   static const int victoryGold = 50;
   static const int victoryExp = 50;
   static const int expPerLevel = 100;        // level = 1 + exp ~/ 100
-  static const int articleBuff = 50;         // buff per newly read article
-  static const int maxAttackBuff = 150;      // cap (max 3 articles stacked)
+  static const int articleBuff = 50;         // buff per newly claimed article
+  static const int maxAttackBuff = 150;      // cap on stored buff
+  static const int dailyArticleQuota = 3;    // max claims per local day
+  static const int readSeconds = 10;         // reading gate before a claim is allowed
+  static const int historyLimit = 100;       // transactions kept in memory / shown in Profile
 }
 ```
 
-### 6.1. Monsters
+### 7.1. Monsters
+HP: Kopi Susu Mahal **300**, Belanja Impulsif **800**, Ongkir Makanan **1500**. Fixed order. `currentHp` is clamped to `0..maxHp`.
 
-HP: Kopi Susu Mahal **300**, Belanja Impulsif **800**, Ongkir Makanan **1500**. Fixed order. HP is never negative (`currentHp = max(0, ...)`) and never exceeds `maxHp`.
-
-### 6.2. Saving ("Catat Tabungan") — player attacks
-
+### 7.2. Saving ("Catat Tabungan"): player attacks
 ```
 baseDamage = max(1, amount ~/ rupiahPerDamage)
 damage     = baseDamage + character.attackBuff
-monster.currentHp = max(0, monster.currentHp - damage)
-character.attackBuff = 0                       // buff is consumed by this attack
-character.gold += amount ~/ rupiahPerGold
-character.exp  += baseExpPerSaving + amount ~/ rupiahPerBonusExp
-character.level = 1 + character.exp ~/ expPerLevel
+newHp      = max(0, monster.currentHp - damage)
+attackBuff = 0                                  // buff is consumed by this attack
+gold      += amount ~/ rupiahPerGold
+exp       += baseExpPerSaving + amount ~/ rupiahPerBonusExp
+level      = 1 + exp ~/ expPerLevel
 ```
+Feedback: SnackBar *"Serangan berhasil! Monster menerima {damage} damage."* plus, if leveled up, *"Naik level! Sekarang Level {level}."*
 
-Feedback: SnackBar *"Serangan berhasil! Monster menerima {damage} damage."* If the level increased: *"Naik level! Sekarang Level {level}."*
-
-### 6.3. Expense ("Catat Pengeluaran") — monster counter-attacks
-
-The hero has no HP. The counter-attack is the monster **healing**:
-
+### 7.3. Expense ("Catat Pengeluaran"): monster counter-attacks
+The hero has no HP; the counter-attack is the monster **healing**:
 ```
 heal = max(1, amount ~/ rupiahPerHeal)
 monster.currentHp = min(monster.maxHp, monster.currentHp + heal)
 ```
+Gold, EXP, and buff are unchanged. Feedback: SnackBar *"Monster menyerang balik! HP monster pulih +{heal}."*
 
-Gold, EXP, and buff are unchanged. Feedback: SnackBar *"Monster menyerang balik! HP monster pulih +{heal}."* Expenses are never allowed while a victory dialog is open (dialog is modal).
+### 7.4. Victory & end of game
+* Victory rewards (`victoryGold`, `victoryExp`) are applied **atomically in the same DB transaction** as the finishing blow (§6.4), so progress can never be lost if the app is closed while the dialog is showing.
+* The Arena shows a victory dialog (`showDialog`, `barrierDismissible: false`) using `SavingResult.defeatedMonsterName`: *"Kamu mengalahkan {name}! Hadiah: +50 Gold, +50 EXP"*, button *"Lanjut"*. The monster display already shows the next monster after the dialog closes.
+* After the last monster: the Arena shows the end-state card *"Semua Monster Boros Telah Dikalahkan!"* with **"Mulai Petualangan Baru"** → `onRestartAdventure()`. The attack form is hidden in this state.
 
-### 6.4. Victory & end of game
+### 7.5. Daily Mission (news)
+* **Goal:** read up to **3 different articles per local day** (`dailyArticleQuota`). Each claimed article gives **+50** attack buff.
+* An article (identified by `url`) can be claimed **only once, ever** (primary key in `claimed_articles`).
+* Buff is stored in SQLite (`attack_buff`), stacks up to **+150**, persists across restarts, and is consumed by the next saving attack, so it works **offline**.
+* The daily quota resets when the local calendar date changes. (Changing the phone clock can bypass this; accepted limitation, §13.)
+* **Reading gate:** tapping an article opens `ArticleReaderSheet` showing title, source, date, and description. The **"Klaim Buff"** button is disabled for `readSeconds` (10 s) with a visible countdown (*"Baca dulu… 7 detik"*), then enabled. This is a lightweight proof-of-reading; true verification is not possible without a browser/WebView package.
+* Feedback messages:
 
-* Victory dialog via `showDialog` (`barrierDismissible: false`), text e.g. *"Kamu mengalahkan {monster.name}! Hadiah: +50 Gold, +50 EXP"*, with button *"Lanjut"*.
-* On "Lanjut": call `onNextMonster()` (bonus gold/EXP applied by parent, level recalculated).
-* After the last monster: Arena shows an end-state card *"Semua Monster Boros Telah Dikalahkan!"* with the button *"Mulai Petualangan Baru"* → `onRestartAdventure()`. The attack form is hidden in this state.
+| Result | SnackBar (Indonesian) |
+|---|---|
+| `granted` | Misi harian tercapai! Kamu mendapatkan Buff Serangan +50! |
+| `alreadyClaimed` | Artikel ini sudah kamu klaim. Cari artikel lain! |
+| `dailyLimitReached` | Misi harian hari ini sudah selesai (3/3). Kembali lagi besok! |
+| `buffAtMax` | Buff Serangan sudah maksimal (+150). Gunakan dulu untuk menyerang! |
 
-### 6.5. News buff (anti-spam)
-
-* Each article (identified by `url`) can grant the buff **once** per app session.
-* Buff stacks up to `maxAttackBuff` (+150) and is consumed on the next saving attack.
-* Tapping an already-claimed article: SnackBar *"Artikel ini sudah kamu baca. Cari artikel lain!"*
-* Tapping when buff is at the cap: SnackBar *"Buff Serangan sudah maksimal (+150). Gunakan dulu untuk menyerang!"*
-
-### 6.6. Financial health status (Profile)
-
+### 7.6. Financial health status (Profile)
 ```
 total = totalSaving + totalExpense
 ratio = totalSaving / total
@@ -389,36 +580,33 @@ ratio = totalSaving / total
 
 | Condition | Label (UI) |
 |---|---|
-| no transactions | Belum ada data |
+| no transactions (`total == 0`) | Belum ada data |
 | ratio ≥ 0.70 | Sehat 💚 |
 | 0.40 ≤ ratio < 0.70 | Waspada 💛 |
 | ratio < 0.40 | Boros ❤️ |
 
+Totals come from the SQL aggregates (all-time), not from the 100-item history list.
+
 ---
 
-## 7. Screen Specifications & Functional Requirements
+## 8. Screen Specifications & Functional Requirements
 
-### 7.1. Entry Point & Theme
-
-* `main.dart`: `WidgetsFlutterBinding.ensureInitialized()`, then `await initializeDateFormatting('id_ID')` (from `package:intl/date_symbol_data_local.dart`), then `runApp`.
-* `MaterialApp(title: 'FinQuest', theme: AppTheme.light, debugShowCheckedModeBanner: false, home: MainNavigationScreen())`.
+### 8.1. Entry Point & Theme
+* `main.dart`: as in §5.3 step 1. `MaterialApp(title: 'FinQuest', theme: AppTheme.light, debugShowCheckedModeBanner: false, home: MainNavigationScreen())`.
 * `AppTheme.light`: `ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary))`.
-* `AppColors`: static `Color` constants only (`primary`, `hpGreen`, `hpRed`, `gold`, etc.).
+* `AppColors`: static `Color` constants only.
 
-### 7.2. Formatters (`lib/core/utils/formatters.dart`)
-
+### 8.2. Formatters (`lib/core/utils/formatters.dart`)
 ```dart
 String formatRupiah(num value);        // NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0)
-String formatDate(String isoString);   // DateTime.tryParse -> .toLocal() -> DateFormat('d MMM yyyy, HH:mm', 'id_ID'); fallback '-' if parsing fails
+String formatDate(String isoString);   // DateTime.tryParse -> .toLocal() -> DateFormat('d MMM yyyy, HH:mm', 'id_ID'); fallback '-'
 String formatDateTime(DateTime date);  // same pattern, for transaction history
+String todayKey();                     // DateFormat('yyyy-MM-dd').format(DateTime.now())
 ```
+All Rupiah figures MUST go through `formatRupiah` (e.g. `Rp 10.000`, never `10000.0`).
 
-All Rupiah figures in every screen MUST go through `formatRupiah` (output example: `Rp 10.000`, never `10000.0`).
-
-### 7.3. Root Navigation (`main_navigation_screen.dart`)
-
+### 8.3. Root Navigation (`main_navigation_screen.dart`)
 * Material 3 `NavigationBar` (NOT `BottomNavigationBar`).
-* **Destinations (3 tabs, short labels to avoid truncation on small screens):**
 
 | Index | Label | Icon (fixed) |
 |---|---|---|
@@ -426,63 +614,50 @@ All Rupiah figures in every screen MUST go through `formatRupiah` (output exampl
 | 1 | Quest | `Icons.newspaper` |
 | 2 | Profil | `Icons.person` |
 
-* Body: `IndexedStack(index: _currentIndex, children: [ArenaScreen, QuestScreen, ProfileScreen])` to preserve state across tabs. `QuestScreen`'s future is therefore fetched only once per session unless the user taps retry.
-* Owns all shared state and callbacks as defined in §5.
+* Body: loading/error states (§5.3), then `IndexedStack(index: _currentIndex, children: [ArenaScreen, QuestScreen, ProfileScreen])` to preserve state across tabs. The Quest future is therefore fetched once per session unless the user taps retry.
+* Owns all shared state and callbacks (§6).
 
-### 7.4. Battle Arena (`arena_screen.dart`)
-
-* Whole screen body wrapped in `SingleChildScrollView` with `padding`.
-* Layout (top to bottom): active-buff chip (*"Buff Serangan: +{attackBuff}"*, shown only if > 0), `MonsterDisplay`, `AttackForm` (or the end-state card, §6.4).
-* **`MonsterDisplay`:**
-  * `Image.asset(monster.assetImagePath, height: 180, errorBuilder: ...)` — on error show a placeholder `Icon(Icons.pest_control, size: 120)` so a missing PNG never crashes the app.
-  * Monster name as title text.
-  * `Text('HP: ${monster.currentHp} / ${monster.maxHp}')`.
-  * `HpBar(currentHp:, maxHp:)`.
-* **`HpBar`:** `TweenAnimationBuilder<double>` (duration 400 ms) animating `begin → end = currentHp / maxHp` into a `LinearProgressIndicator(value: animatedValue, minHeight: 14)` with rounded corners; color green > 50 %, orange 25–50 %, red < 25 %.
+### 8.4. Battle Arena (`arena_screen.dart`)
+* Body wrapped in `SingleChildScrollView` with padding.
+* Layout: active-buff chip (*"Buff Serangan: +{attackBuff}"*, only if > 0), `MonsterDisplay`, `AttackForm` (or the end-state card, §7.4).
+* **`MonsterDisplay`:** `Image.asset(..., height: 180, errorBuilder: ...)` with an icon placeholder on error; name as title; `Text('HP: ${monster.currentHp} / ${monster.maxHp}')`; `HpBar`.
+* **`HpBar`:** `TweenAnimationBuilder<double>` (400 ms) feeding a `LinearProgressIndicator(value:, minHeight: 14)` with rounded corners; green > 50 %, orange 25–50 %, red < 25 %.
 * **`AttackForm`:**
-  * Amount `TextField`: `controller`, `keyboardType: TextInputType.number`, `inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(9)]`, `InputDecoration(border: OutlineInputBorder(), prefixIcon: Icon(Icons.monetization_on), labelText: 'Nominal Transaksi')`.
-  * Description `TextField` (standard text, label *"Deskripsi (opsional)"*). If empty, fallback description: *"Tabungan"* for saving, *"Pengeluaran"* for expense.
-  * Two buttons: **"Catat Tabungan"** (`FilledButton`) and **"Catat Pengeluaran"** (`OutlinedButton`).
-  * **Validation:** amount empty or `<= 0` → show inline `errorText` *"Masukkan nominal lebih dari 0"* and do not call callbacks.
-  * On success: call the callback, clear both controllers, `FocusScope.of(context).unfocus()`.
-  * Controllers disposed in `dispose()`.
-* **Arena flow after "Catat Tabungan":** call `onSaving` → show SnackBar (§6.2) → if `monster.isDefeated`, show victory dialog (§6.4) → on "Lanjut" call `onNextMonster()`.
-* **Arena flow after "Catat Pengeluaran":** call `onExpense` → show SnackBar (§6.3).
-* Always check `if (!mounted) return;`/`context.mounted` before using `context` after any `await`.
+  * Amount `TextField`: `keyboardType: TextInputType.number`, `inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(9)]`, `InputDecoration(border: OutlineInputBorder(), prefixIcon: Icon(Icons.monetization_on), labelText: 'Nominal Transaksi')`.
+  * Description `TextField` (label *"Deskripsi (opsional)"*; fallback *"Tabungan"* / *"Pengeluaran"* when empty).
+  * Buttons **"Catat Tabungan"** (`FilledButton`) and **"Catat Pengeluaran"** (`OutlinedButton`), disabled while `_isSubmitting`.
+  * Validation: empty or `<= 0` → inline `errorText` *"Masukkan nominal lebih dari 0"*; callbacks not called.
+  * On success: clear controllers, `FocusScope.of(context).unfocus()`. Dispose controllers in `dispose()`.
+* **Flow after saving:** `await onSaving` → if `null`, stop (parent already showed the error) → SnackBar (§7.2) → if `defeatedMonsterName != null`, show the victory dialog.
+* **Flow after expense:** `await onExpense` → SnackBar (§7.3).
+* The Arena works fully offline.
 
-### 7.5. Quest & News Screen (`quest_screen.dart`)
+### 8.5. Quest & News Screen (`quest_screen.dart`): the only online screen
+* `StatefulWidget` holding `late Future<List<Article>> _articlesFuture;` assigned in `initState()` (and re-assigned on retry/refresh). **Never call the service in `build()`** (NewsAPI free quota is 100 requests/day).
+* **Mission header (works offline, built from props):** *"Misi Harian: {claimsToday}/3 artikel"*, a progress indicator, and current buff *"Buff Serangan: +{attackBuff}"*. A short note: *"Baca berita keuangan untuk mendapat Buff Serangan. Arena dan Profil tetap bisa dipakai tanpa internet."*
+* `FutureBuilder<List<Article>>`:
+  * `waiting` → centered `CircularProgressIndicator()`.
+  * `hasError` → centered icon, Indonesian message (§9.3), and **"Coba Lagi"** button (`setState(() => _articlesFuture = NewsService().fetchFinancialNews())`).
+  * Empty list → *"Belum ada berita saat ini."* + retry.
+  * Data → `ListView.builder` of `NewsCard`, optionally inside `RefreshIndicator`.
+* **`NewsCard`:** Material `Card`; thumbnail via `Image.network` only if `urlToImage != null` (with `errorBuilder`/`loadingBuilder` fallbacks); title (max 3 lines); source; date via `formatDate`; *"Sudah diklaim"* badge and dimmed style if `isClaimed`.
+* **Tap handling:** tap → `showModalBottomSheet` with `ArticleReaderSheet`. When the user presses **"Klaim Buff"**: close the sheet, `await onArticleRead(article)`, hide any current SnackBar, then show the message for the returned `ArticleClaimResult` (§7.5).
+* **`ArticleReaderSheet`:** scrollable content (title, source, date, description, and `SelectableText(article.url)` so the user can copy the full-article link). If `isClaimed`, the button is disabled with label *"Sudah Diklaim"*. Otherwise the countdown (`Timer.periodic`, cancelled in `dispose()`) runs from `readSeconds` to 0, then the button becomes enabled.
+* Articles are not opened in an external browser (no `url_launcher`; locked dependencies). See §13 open decisions.
 
-* `StatefulWidget`. Holds `late Future<List<Article>> _articlesFuture;` assigned in `initState()` with `NewsService().fetchFinancialNews()`. **Do NOT call the service inside `build()`** (it would re-fetch on every rebuild and burn the free NewsAPI quota of 100 requests/day).
-* Header: short explanation card *"Baca berita keuangan untuk mendapat Buff Serangan! (+50 per artikel baru, maks +150)"* and current buff.
-* `FutureBuilder<List<Article>>(future: _articlesFuture, ...)`:
-  * `ConnectionState.waiting` → centered `CircularProgressIndicator()`.
-  * `snapshot.hasError` → centered icon, the Indonesian message from the exception (§8.3), and a **"Coba Lagi"** button: `setState(() { _articlesFuture = NewsService().fetchFinancialNews(); })`.
-  * Empty list → message *"Belum ada berita saat ini."* + retry button.
-  * Data ready → `ListView.builder` of `NewsCard`.
-  * Optionally wrap in `RefreshIndicator` (same re-assignment of the future).
-* **`NewsCard`:** Material `Card`, thumbnail via `Image.network` **only if** `urlToImage != null`, with `errorBuilder` and `loadingBuilder` fallbacks (placeholder icon), title (max 3 lines, ellipsis), source name, date via `formatDate`. If `isClaimed`, show a check badge/label *"Sudah dibaca"* and a dimmed style.
-* **Tap handling (in `QuestScreen`):**
-  1. If `claimedArticleUrls.contains(article.url)` → SnackBar *"Artikel ini sudah kamu baca. Cari artikel lain!"*.
-  2. Else call `onArticleRead(article)`: `true` → SnackBar *"Misi harian tercapai! Kamu mendapatkan Buff Serangan +50!"*; `false` → SnackBar *"Buff Serangan sudah maksimal (+150). Gunakan dulu untuk menyerang!"*.
-  3. Before showing a new SnackBar call `ScaffoldMessenger.of(context).hideCurrentSnackBar()`.
-* Articles are NOT opened in a browser (no `url_launcher`; locked dependencies).
-
-### 7.6. Profile & Summary Screen (`profile_screen.dart`)
-
-* Whole body: `SingleChildScrollView` containing a `Column`.
-* **Hero Stats Header (Card):** hero name, Level, Total Gold, EXP (total, plus text *"{exp % 100} / 100 EXP menuju level berikutnya"*), Active Buff (*"+{attackBuff}"*).
-* **Financial Summary (Card):** Total Tabungan, Total Pengeluaran (both via `formatRupiah`), and the Financial Health label (§6.6).
-* **Transaction History:** read-only, newest first. Because the screen is already scrollable, build it with `Column(children: transactions.reversed.map(...).toList())` or `ListView(shrinkWrap: true, physics: NeverScrollableScrollPhysics())`. Each item: icon (savings = green arrow up, expense = red arrow down), description, `formatDateTime`, signed amount (`+Rp 10.000` / `-Rp 10.000`).
+### 8.6. Profile & Summary Screen (`profile_screen.dart`)
+* Body: `SingleChildScrollView` containing a `Column`.
+* **Hero Stats (Card):** name, Level, Total Gold, EXP total plus *"{exp % 100} / 100 EXP menuju level berikutnya"*, Active Buff *"+{attackBuff}"*.
+* **Financial Summary (Card):** Total Tabungan, Total Pengeluaran (`formatRupiah`), and the Financial Health label (§7.6).
+* **Transaction History:** read-only, newest first, titled *"Riwayat Transaksi (100 terakhir)"*. Build with `Column(children: recentTransactions.map(...).toList())` or a `ListView(shrinkWrap: true, physics: NeverScrollableScrollPhysics())`. Item: icon (saving = green up-arrow, expense = red down-arrow), description, `formatDateTime`, signed amount (`+Rp 10.000` / `-Rp 10.000`).
 * Empty state: *"Belum ada transaksi. Mulai catat di Arena!"*.
+* Works fully offline.
 
 ---
 
-## 8. Network Service Specification
+## 9. Network Service Specification (Quest only)
 
-### 8.1. `lib/core/constants/api_endpoints.dart`
-
-The API key is injected at build time and is NEVER hardcoded:
-
+### 9.1. `lib/core/constants/api_endpoints.dart`
 ```dart
 class ApiEndpoints {
   static const String apiKey = String.fromEnvironment('NEWS_API_KEY');
@@ -490,12 +665,10 @@ class ApiEndpoints {
       'https://newsapi.org/v2/top-headlines?category=business&country=us&apiKey=$apiKey';
 }
 ```
+* `country=us` is a deliberate choice (the free tier returns little or nothing for `country=id`). Consequence: article text is in English while the UI is Indonesian.
+* If `apiKey` is empty, the service throws a `NewsException` without calling the network.
 
-* `country=us` is a deliberate choice: NewsAPI's free tier returns few or no results for `country=id`. Consequence: article content is in English while the UI is Indonesian. This is acceptable for the assignment and should be mentioned in the project report.
-* If `apiKey` is empty, the service MUST throw the error in §8.3 (code `missing key`) instead of calling the network.
-
-### 8.2. `lib/services/news_service.dart`
-
+### 9.2. `lib/services/news_service.dart`
 ```dart
 import 'dart:async';
 import 'dart:convert';
@@ -537,7 +710,7 @@ class NewsService {
           throw NewsException('Gagal memuat berita (kode ${response.statusCode}). Coba lagi nanti.');
       }
     } on SocketException {
-      throw NewsException('Tidak ada koneksi internet. Periksa jaringanmu lalu coba lagi.');
+      throw NewsException('Tidak ada koneksi internet. Misi harian butuh internet; fitur lain tetap bisa dipakai.');
     } on TimeoutException {
       throw NewsException('Koneksi terlalu lama. Coba lagi.');
     } on FormatException {
@@ -547,9 +720,9 @@ class NewsService {
 }
 ```
 
-### 8.3. Error → UI message mapping
+### 9.3. Error → UI message mapping
 
-| Situation | Message shown (Indonesian) |
+| Situation | Message (Indonesian) |
 |---|---|
 | API key missing | API key belum diatur… |
 | HTTP 401 | API key tidak valid… |
@@ -564,21 +737,21 @@ class NewsService {
 
 ---
 
-## 9. Project Setup & Developer Onboarding
+## 10. Project Setup & Developer Onboarding
 
-### 9.1. Clone & Navigate
+### 10.1. Clone & Navigate
 ```bash
 git clone https://github.com/<your-username>/<repo-name>.git
 cd <repo-name>
 ```
 
-### 9.2. Generate Platform Folders (only if `android/` and `ios/` are missing)
+### 10.2. Generate Platform Folders (only if `android/` and `ios/` are missing)
 ```bash
 flutter create . --project-name finquest --platforms=android,ios
 ```
 This must NOT overwrite `lib/main.dart` or `pubspec.yaml` content; restore them from Git if replaced.
 
-### 9.3. Scaffold Missing Directories (if starting clean)
+### 10.3. Scaffold Missing Directories (if starting clean)
 * **macOS / Linux / Git Bash:**
   ```bash
   mkdir -p assets/images lib/core/constants lib/core/theme lib/core/utils lib/models lib/services lib/screens/arena/widgets lib/screens/quest/widgets lib/screens/profile lib/widgets
@@ -588,29 +761,28 @@ This must NOT overwrite `lib/main.dart` or `pubspec.yaml` content; restore them 
   New-Item -ItemType Directory -Force -Path assets/images, lib/core/constants, lib/core/theme, lib/core/utils, lib/models, lib/services, lib/screens/arena/widgets, lib/screens/quest/widgets, lib/screens/profile, lib/widgets
   ```
 
-### 9.4. Assets
-The three monster PNG files MUST be committed (empty folders are not tracked by Git, and a missing asset folder breaks `flutter pub get`/build). Recommended size: ≤ 512×512 px, transparent background.
+### 10.4. Assets
+Commit the three monster PNGs (empty folders are not tracked by Git and a missing asset folder breaks the build). Recommended: ≤ 512×512 px, transparent background.
 
-### 9.5. Android INTERNET Permission (required for release builds)
-In `android/app/src/main/AndroidManifest.xml`, add inside `<manifest>` (outside `<application>`):
+### 10.5. Android INTERNET Permission (required for release builds)
+In `android/app/src/main/AndroidManifest.xml`, inside `<manifest>` and outside `<application>`:
 ```xml
 <uses-permission android:name="android.permission.INTERNET"/>
 ```
-iOS needs no extra configuration (HTTPS only).
+iOS needs no extra configuration. `sqflite` needs no permissions.
 
-### 9.6. Install Dependencies
+### 10.6. Install Dependencies
 ```bash
 flutter pub get
 ```
 
-### 9.7. Configure API Key (never commit it)
-Get a free key from newsapi.org, then run with:
+### 10.7. Configure API Key (never commit it)
 ```bash
 flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
 ```
-In VS Code, add `"args": ["--dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY"]` to your **local, uncommitted** `launch.json` (add `.vscode/` to `.gitignore`). In Android Studio, use *Run → Edit Configurations → Additional run args*.
+VS Code: put `"args": ["--dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY"]` in a **local, uncommitted** `launch.json` (add `.vscode/` to `.gitignore`). Android Studio: *Run → Edit Configurations → Additional run args*. Release build: `flutter build apk --dart-define=NEWS_API_KEY=...`.
 
-### 9.8. Verify & Run
+### 10.8. Verify & Run
 ```bash
 flutter doctor
 flutter devices
@@ -618,7 +790,10 @@ flutter analyze
 flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
 ```
 
-### 9.9. Troubleshooting
+### 10.9. Reset Local Data (during development)
+Uninstall the app from the device/emulator, or *Settings → Apps → FinQuest → Storage → Clear data*. Do this after any schema change before the schema version is bumped properly.
+
+### 10.10. Troubleshooting
 ```bash
 flutter clean
 flutter pub get
@@ -627,74 +802,102 @@ flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
 
 ---
 
-## 10. AI Prompting Instructions for Teammates (Vibecoding Template)
+## 11. AI Prompting Instructions for Teammates (Vibecoding Template)
 
-Paste this into your AI coding assistant (Cursor, Copilot, ChatGPT, Claude) before generating code, and attach this PRD:
+Paste into your AI coding assistant (Cursor, Copilot, ChatGPT, Claude, Gemini) and attach this PRD:
 
 ```text
 Context & Rules:
-- Project: FinQuest (Flutter Mobile College Assignment).
-- Strictly obey PRD.md v2.0 (models in section 4, constructor contracts in section 5, game rules in section 6).
+- Project: FinQuest (Flutter offline-first mobile app, college final project).
+- Strictly obey PRD.md v3.0: models (section 4), SQLite schema (5.1), constructor contracts (6.3), game rules (7).
 - FORBIDDEN: external state management (No Bloc, Riverpod, Provider, GetX). Use only StatefulWidget and setState().
-- Shared state lives ONLY in MainNavigationScreen. Child screens use constructor params and callbacks exactly as defined in section 5.3. Never mutate shared objects from child screens.
-- FORBIDDEN: local databases (No Hive, Isar, SQFlite, SharedPreferences). In-memory state only.
-- Allowed packages: flutter, http, intl only. SDK libraries (dart:io, dart:async, flutter/services.dart) are fine.
-- DO NOT rename or change model schemas, constructor signatures, or folder structure.
+- Persistence: ONLY sqflite + path, ONLY inside lib/services/database_helper.dart. FORBIDDEN: Hive, Isar, Drift, SharedPreferences, Firebase, JSON files.
+- Only MainNavigationScreen calls DatabaseHelper. Child screens use constructor params and async callbacks exactly as in 6.3. Never mutate shared objects from child screens.
+- Write-through order: compute -> await DB (single transaction for multi-table changes) -> setState. On DB error: SnackBar "Gagal menyimpan data. Coba lagi." and leave state unchanged.
+- Offline-first: only QuestScreen/NewsService may use the network. Arena and Profile must work in airplane mode. Never await network at startup.
+- Allowed packages: flutter, http, intl, sqflite, path. SDK libraries (dart:io, dart:async, flutter/services.dart) are fine.
+- DO NOT rename or change model schemas, table/column names, constructor signatures, or folder structure.
 - All game numbers come from lib/core/constants/game_rules.dart. All Rupiah text uses formatRupiah().
 - Wrap any screen containing a TextField in SingleChildScrollView. Never put a ListView inside a SingleChildScrollView without shrinkWrap + NeverScrollableScrollPhysics.
 - Never call NewsService inside build(); cache the Future in initState.
-- Never hardcode the API key; it comes from String.fromEnvironment('NEWS_API_KEY').
-- Use Material 3 (NavigationBar, FilledButton, ColorScheme.fromSeed).
-- Write code and comments in English, but keep ALL UI strings in Indonesian.
-- Modify ONLY this file: [INSERT_TARGET_FILE_PATH, e.g., lib/screens/arena/arena_screen.dart]
+- Never hardcode the API key; use String.fromEnvironment('NEWS_API_KEY').
+- Use parameterized SQL only. Use Material 3 (NavigationBar, FilledButton, ColorScheme.fromSeed).
+- Check mounted / context.mounted after every await before using context or calling setState.
+- Write code, comments, and DB identifiers in English, but keep ALL UI strings in Indonesian.
+- Modify ONLY this file: [INSERT_TARGET_FILE_PATH, e.g., lib/services/database_helper.dart]
 - If you need something from another file, assume it exists with the signature in the PRD; do not rewrite it.
 ```
 
 ---
 
-## 11. Acceptance Criteria (Definition of Done)
+## 12. Acceptance Criteria (Definition of Done)
 
-### 11.1. Build & Quality
+### 12.1. Build & Quality
 - [ ] `flutter run --dart-define=NEWS_API_KEY=...` builds and runs on at least one Android device/emulator (iOS if available).
 - [ ] `flutter analyze` reports **0 errors and 0 warnings**.
-- [ ] `pubspec.yaml` contains only `flutter`, `http`, `intl` (plus dev dependencies).
-- [ ] No real API key exists anywhere in the repository (`git grep` check).
+- [ ] `pubspec.yaml` contains only `flutter`, `http`, `intl`, `sqflite`, `path` (plus dev dependencies).
+- [ ] `sqflite`/`path` are imported only in `database_helper.dart`; `http` only in `news_service.dart`.
+- [ ] No real API key and no `.db` file exist in the repository (`git grep`/`git ls-files` check).
 - [ ] No file exists outside the tree in §3 (except allowed exceptions).
 
-### 11.2. Layout & Navigation
-- [ ] No yellow-and-black overflow banner when the keyboard opens in Arena, on a small screen (e.g. 360×640) and in landscape.
-- [ ] Switching tabs via `NavigationBar` preserves state (Arena inputs/HP, Quest scroll position, Profile data).
+### 12.2. Layout & Navigation
+- [ ] No overflow banner when the keyboard opens in Arena on a small screen (360×640) and in landscape.
+- [ ] Switching tabs preserves state (Arena inputs/HP, Quest scroll position, Profile data).
 - [ ] Tab labels are not truncated on a 360 px-wide screen.
+- [ ] A loading indicator shows briefly at startup; a DB load failure shows the retry state instead of a crash.
 
-### 11.3. Gameplay (manual test scenarios)
-- [ ] Saving Rp 10.000 with no buff deals exactly 10 damage; HP text and `HpBar` update immediately with animation.
-- [ ] Saving Rp 500 deals 1 damage (minimum), and Gold/EXP/Level follow §6.2.
-- [ ] Expense Rp 20.000 heals the monster by 10 HP, never above `maxHp`; a transaction is logged.
+### 12.3. Gameplay
+- [ ] Saving Rp 10.000 with no buff deals exactly 10 damage; HP text and `HpBar` update with animation.
+- [ ] Saving Rp 500 deals 1 damage (minimum); Gold/EXP/Level follow §7.2.
+- [ ] Expense Rp 20.000 heals the monster by 10 HP (never above `maxHp`) and logs a transaction.
 - [ ] Empty, `0`, or non-numeric amount is rejected with the inline error; letters cannot be typed.
-- [ ] Reading 1 article gives +50 buff; the next saving attack deals extra 50 damage and resets the buff to 0.
-- [ ] Tapping the same article twice grants the buff only once and shows the "sudah dibaca" SnackBar.
-- [ ] Reading 4 different articles stops at +150 and shows the max-buff SnackBar.
-- [ ] Defeating monster 1 shows the victory dialog; "Lanjut" advances to monster 2 with full HP and awards +50 Gold/+50 EXP.
-- [ ] Defeating all three monsters shows the end-state card; "Mulai Petualangan Baru" resets monsters but keeps Gold, EXP, Level, and history.
+- [ ] Tapping a button twice quickly creates only **one** transaction (buttons disabled while submitting).
+- [ ] Defeating monster 1 shows the victory dialog and the next monster appears at full HP; +50 Gold/+50 EXP are applied.
+- [ ] Defeating all three monsters shows the end-state card; "Mulai Petualangan Baru" resets monsters but keeps Gold, EXP, Level, history, and claims.
 
-### 11.4. Network
-- [ ] Headlines load from NewsAPI and render via `ListView.builder`; items titled "[Removed]" are not shown.
-- [ ] Airplane mode shows the "Tidak ada koneksi internet" message; after reconnecting, "Coba Lagi" loads articles.
-- [ ] Wrong API key shows the 401 message; no crash occurs in any error case.
+### 12.4. Persistence & Offline (NEW)
+- [ ] After logging transactions, hurting a monster, and claiming a buff, **force-closing and reopening** the app restores all of it exactly (HP, gold, EXP, level, buff, history, current monster).
+- [ ] Killing the app **while the victory dialog is open** leaves the rewards applied and the next monster active on relaunch.
+- [ ] In **airplane mode from a fresh launch**, Arena and Profile work fully, and logging/attacks persist; Quest shows the no-internet message with a working **"Coba Lagi"** after reconnecting.
+- [ ] A buff claimed online is usable in an attack while offline and is consumed (reset to 0) after the attack, also after restart.
+- [ ] A simulated DB error (e.g. temporarily throwing in `persistTurn`) shows the error SnackBar and leaves UI state unchanged (no half-applied update).
+- [ ] Profile totals match the sum of all records even when there are more than 100 transactions; only the latest 100 are listed.
+- [ ] Transaction descriptions containing quotes or SQL characters (e.g. `'; DROP TABLE x; --`) are stored and displayed literally.
+
+### 12.5. Daily Mission & Network
+- [ ] Headlines load from NewsAPI and render via `ListView.builder`; "[Removed]" items are hidden.
+- [ ] Tapping an article opens the reader sheet; the claim button is disabled for 10 seconds with a countdown, then enabled.
+- [ ] A claim gives +50 buff and survives a restart; claiming the same article again shows the "sudah diklaim" message.
+- [ ] The 4th claim on the same day shows the daily-limit message; after the device date moves to the next day, the quota is available again (claimed URLs stay claimed).
+- [ ] Buff never exceeds +150.
+- [ ] Wrong API key shows the 401 message; no crash occurs in any network error case.
 - [ ] Switching tabs back and forth does NOT trigger a new API request.
 - [ ] Articles without images render without errors.
 
-### 11.5. Profile & Formatting
-- [ ] Every money value displays as `Rp 10.000` format (dot thousands separator, no decimals).
-- [ ] Dates display in Indonesian (e.g. `14 Okt 2026, 09:30`), with no `LocaleDataException`.
-- [ ] Transaction history lists newest first, shows empty state initially, and does not cause an "unbounded height" error.
-- [ ] Financial health label matches §6.6 for the three thresholds and the empty state.
+### 12.6. Profile & Formatting
+- [ ] Every money value displays like `Rp 10.000`.
+- [ ] Dates display in Indonesian (e.g. `14 Okt 2026, 09:30`) with no `LocaleDataException`.
+- [ ] Transaction history is newest first, shows the empty state initially, and causes no "unbounded height" error.
+- [ ] Financial health label matches §7.6 for all three thresholds and the empty state.
 
 ---
 
-## 12. Known Limitations (to mention in the project report)
+## 13. Risks, Known Limitations & Open Decisions
 
-* All progress resets when the app is closed (no persistence by design).
-* News content is in English (`country=us`).
-* NewsAPI free tier: 100 requests/day and development-use only; articles may be delayed.
-* Hero HP does not exist; "counter-attack" is represented as monster healing.
+**Known limitations**
+* No cloud backup or sync: uninstalling the app or clearing its data erases all progress.
+* No edit/delete of transactions (battle effects would need rollback rules; planned for a later version).
+* Daily quota relies on the device clock; changing the phone date can bypass it.
+* News content is English (`country=us`); the Quest tab needs internet and has no offline article cache.
+* `sqflite` targets Android/iOS only.
+* Hero HP does not exist; "counter-attack" is represented as the monster healing.
+
+**Risks if the app is distributed to real users**
+* **NewsAPI free (Developer) plan is licensed for development only** and is limited to 100 requests/day; real public use needs a paid plan or another news source.
+* **An API key passed via `--dart-define` is still embedded in the app binary** and can be extracted. A truly secure setup needs a small backend proxy (out of scope for this assignment).
+* **Course rules:** earlier PRD versions forbade local databases. Confirm with the lecturer that `sqflite` is acceptable for this assignment before submission.
+
+**Open decisions for the team**
+* Add `url_launcher` so users can open the full article in a browser (currently they only read title/description and copy the link)?
+* Add a "Reset Data" action with confirmation in Profile?
+* Allow the hero name to be edited (currently seeded as "Pahlawan Hemat")?
