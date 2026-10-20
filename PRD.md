@@ -1,27 +1,92 @@
-# Product Requirement Document (PRD) — v4.0 (Offline-First + Budget Survival)
+# Product Requirement Document (PRD) — v5.2 (Firebase + Provider + Offline-First + Budget Survival)
 
 ## FinQuest: Pahlawan Finansial (Mobile Application)
 
-> **Revision summary (v3.0 → v4.0):** added the **Budget Survival** system. Users set a **daily spending limit per category** (e.g. Makan max Rp 50.000/day). Spending beyond a limit costs the **hero's HP** (the hero now has HP), and when HP reaches 0 the **hero's level drops**. Changes: `Character` gets `hp`/`maxHp`; `TransactionRecord` gets a fixed `category`; new `Budget` model, `budgets` table and `date_key` column; new rules for overage penalty, healing, daily regeneration and level-down (§7); new Arena hero status and category input (§8.4); budget progress and settings in Profile (§8.6); updated contracts (§6.3) and acceptance tests (§12). The database schema stays at **version 1** because the app is not released yet (clear app data on dev devices once).
+> **Revision summary (v5.1 → v5.2):** review fixes on top of v5.1, which follows the lecturer's Pertemuan 12 layered architecture (**UI → Store/ViewModel (`ChangeNotifier` + `provider`) → Repository → Service**) together with Pertemuan 13 (UI & notifications), 14 (web service, auth & security) and 15 (full CRUD & signed release).
+> * **Bug fixes:** corrupted `NEWS_API_URL` default in §10.1; the hero name no longer stays stale after registration (`ChangeNotifierProxyProvider0` + `GameStore.updateProfile`, §6.2/§7.2); `GameStore` is safe against use-after-dispose (`_disposed` guard, §7.1/§7.4); `TransactionDetailScreen` no longer throws when its record is deleted (§9.6); an unambiguous `GameStateEvent` contract so default data can never overwrite real progress (§4.7/§5.4/§5.6).
+> * **Quality:** `GameStore` receives its dependencies through the constructor, so it is unit-testable with fakes (§7.2); required `context.select`/`Selector`, change-only `notifyListeners()` and copy-on-change publishing to limit rebuilds (§7.1/§7.4); Security Rules also validate `category` (§5.3); `provider` is added with `flutter pub add` instead of a hand-written version (§2).
+> * **Earlier in v5.1:** state management moved from prop-drilling to a single `GameStore extends ChangeNotifier` (`lib/state/game_store.dart`); `AppTheme.dark` added with `ThemeMode.system` (Pertemuan 06).
+> * **Unchanged:** models §4.1–4.6, Firestore schema (§5.2), game rules & formulas (§8), NewsAPI logic (§10), notifications (§11), release & distribution (§12). **Changed sections:** §2 (#1), §4.7, §5.3–5.6, §6.2, §7, §9.6, §10.1, §13–§16.
 
 ---
 
-## 1. Project Overview
+## 1. Product Overview
 
 * **Application Name:** FinQuest: Pahlawan Finansial
-* **Platform:** Flutter (Target: Android & iOS)
+* **Platform:** Flutter (Android primary; iOS best-effort if a Mac is available)
 * **Category:** Gamified Personal Finance & Financial Literacy
-* **Objective:** Help university students and young adults manage expenses and build consistent saving habits through an RPG. Saving attacks "Monster Boros"; **overspending the user's own daily limits hurts the hero**. Daily financial-news reading quests give attack buffs.
-* **Core loop:**
-  1. The user sets daily limits per category (defaults provided).
-  2. Saving money → damages the current monster, grants Gold/EXP, restores a little hero HP.
-  3. Spending within the limit → just logged, no penalty.
-  4. Spending **over** the limit → hero loses HP and the monster heals. At 0 HP the hero drops one level.
-  5. Reading up to 3 news articles per day → attack buff for the next saving.
-* **Offline-first principle:** logging, budgets, battles, and the profile MUST work with **zero internet connectivity**. Only the **Quest** tab needs the network. A network failure must never block or crash any other feature.
-* **Persistence:** all user data survives app restarts (local SQLite).
-* **Academic Context:** Mobile Programming Final Term Project (Tugas Besar, deadline mid-to-late December). Assessment focuses on widget architecture, overflow-resilient layouts, asynchronous REST API consumption, local database usage, and Material 3.
-* **Out of Scope (this version):** user accounts, cloud sync/backup, edit or delete of transactions, custom (user-created) categories, push notifications, web/desktop targets (`sqflite` supports Android/iOS only), multi-language switching.
+* **Academic Context:** Mobile Programming (BBK4DBB3) Tugas Besar 1–3, deadline mid-to-late December.
+
+### 1.1. Problem & Target Users
+* **Users:** university students and young adults (18–25) on Android with a limited allowance.
+* **Problem:** they struggle to record expenses consistently and to stick to their own spending limits; typical finance apps feel like chores.
+* **Solution:** an RPG where saving damages "Monster Boros", and spending **beyond the limits the user sets** hurts the hero. Reading daily finance news gives attack buffs.
+
+### 1.2. Core Features (MVP, max 5)
+| # | Feature | Summary |
+|---|---|---|
+| F1 | **Account & Login** | Register/login with email + password (Firebase Auth); secure session; logout |
+| F2 | **Arena (log + battle)** | Log savings/expenses with category; monster battle; hero HP and level-down |
+| F3 | **Daily Budget** | User-defined daily limit per category; progress bars; daily HP regeneration; daily reminder notification |
+| F4 | **History & CRUD** | List, detail, edit, delete (with confirmation and undo) of transactions |
+| F5 | **Daily Mission (news)** | Read up to 3 articles/day from NewsAPI (REST) for attack buffs |
+
+### 1.3. User Flows
+* **End-to-end demo flow (matches the P15 demo scenario):**
+  `Register/Login → Arena: Catat Tabungan (monster hit) → Catat Pengeluaran (pick category; over limit = HP loss) → Riwayat (list) → Detail → Ubah → Hapus (confirm, Urungkan) → Quest: read article → Klaim Buff → Arena: stronger attack → Profil: Atur Batas Harian, enable Pengingat Harian → notification appears → Keluar`
+* **Auth flow:** app start → `AuthGate` → (no session) Login ⇄ Register → (session) `ChangeNotifierProvider<GameStore>` wrapping `MainNavigationScreen`. Session survives app restarts and works offline.
+* **CRUD flow:** Riwayat → tap item → Detail → [Ubah → Edit form → Simpan → back to list] or [Hapus → dialog → back to list + SnackBar *Urungkan*].
+* **Quest flow:** Quest tab → article list → tap → reader sheet (10 s gate) → Klaim Buff → SnackBar.
+
+### 1.4. Wireframes (low-fidelity; recreate in Figma for the P13 document)
+
+```text
+LOGIN                    ARENA                         RIWAYAT
+┌────────────────┐      ┌────────────────────────┐    ┌────────────────────────┐
+│   FinQuest     │      │ Pahlawan Hemat  Lv 3   │    │ Riwayat Transaksi      │
+│ [Email       ] │      │ HP Hero ████████░░ 80  │    │ ┌────────────────────┐ │
+│ [Kata sandi 👁]│      │ ┌────────────────────┐ │    │ │↓ Makan siang       │ │
+│ [   Masuk    ] │      │ │   (monster image)  │ │    │ │  Makan  -Rp 25.000 │ │
+│ Belum punya    │      │ │ Monster Kopi Susu  │ │    │ ├────────────────────┤ │
+│ akun? Daftar   │      │ │ HP ██████░░░ 210   │ │    │ │↑ Tabungan          │ │
+└────────────────┘      │ └────────────────────┘ │    │ │         +Rp 50.000 │ │
+                         │ [Nominal Transaksi   ] │    │ └────────────────────┘ │
+DETAIL / EDIT            │ [Kategori ▼ Makan    ] │    │ (empty/loading states) │
+┌────────────────┐      │ Terpakai Rp 30k/50k    │    └────────────────────────┘
+│ ← Detail       │      │ [Deskripsi           ] │
+│ Makan siang    │      │ [Catat Tabungan]       │    PROFIL
+│ -Rp 25.000     │      │ [Catat Pengeluaran]    │    ┌────────────────────────┐
+│ Makan • 14 Okt │      └────────────────────────┘    │ Stats: Lv, HP, Gold    │
+│ [Ubah] [Hapus] │      [Arena|Riwayat|Quest|Profil]  │ Anggaran Harian (bars) │
+└────────────────┘                                     │ [Atur Batas Harian]    │
+                                                       │ Pengingat Harian  [⏻]  │
+                                                       │ [Keluar]               │
+                                                       └────────────────────────┘
+```
+
+### 1.5. Product Principles
+* **Offline-first:** after the first login, logging, budgets, battles, history, and CRUD work with **no internet** (Firestore offline cache + queued writes, synced automatically later). Only **login/register** and the **Quest article list** need the network.
+* **Persistence:** all data lives in Firestore under the signed-in user; it survives restarts and reinstalls (after login).
+* **Security:** per-user Firestore Security Rules, no secrets beyond the documented exception (§13), obfuscated release build.
+
+### 1.6. Rubric Traceability (lecturer slides → this PRD)
+| Slide requirement | Where covered |
+|---|---|
+| P06: Material 3 `ColorScheme.fromSeed`, light + dark theme | §9.1 |
+| P10/P12: Detail screen, PUT/update, DELETE with confirmation & undo | §9.5–9.7 |
+| P12: Layered architecture (UI → Store/ViewModel `ChangeNotifier` + `provider` → Repository → Service) | §2 (#1, #3), §3, §7 |
+| P13: topic, users, max 5 features, user flow, wireframe, task division | §1.1–1.4, §17 |
+| P13: folder structure, feature-per-folder, widgets ≤ ~150 lines, Git branch per feature, `flutter analyze` | §2 (#12), §3 |
+| P13: all screens navigable, back works | §9.1, §15 |
+| P13: loading / error / empty states, validation, two screen sizes, demo on emulator + phone | §9.10, §9.11, §15 |
+| P13/P15: local notification (+ Android 13 permission) | §11 |
+| P14: all main features use API/Firebase data | §5, §10 |
+| P14: login works, token stored securely | §6 |
+| P14: runtime permission requested when needed, app works if denied | §11 |
+| P14: security checklist (HTTPS, secrets, backend validation, Security Rules, obfuscation, minimal permissions) | §13 |
+| P14: performance basics (const, builder, cached images, profile mode) | §13, §15 |
+| P15: full CRUD end-to-end demo | §9.5–9.7, §15 |
+| P15: applicationId, version, signed build, minimal permissions, distribution evidence, README | §12 |
 
 ---
 
@@ -29,51 +94,18 @@
 
 > ⚠️ **CRITICAL DIRECTIVES FOR AI ASSISTANTS & VIBECODERS:**
 >
-> 1. **NO Third-Party State Management**
->    * **FORBIDDEN:** `bloc`, `flutter_bloc`, `provider`, `riverpod`, `get`, `mobx`.
->    * **REQUIRED:** vanilla Flutter only: `StatefulWidget` + `setState()` and constructor callbacks. Shared state is owned by `MainNavigationScreen` (§6).
->    * Also FORBIDDEN as shared-state mechanisms: `InheritedWidget`, `ChangeNotifier`, `ValueNotifier`, global mutable variables.
->    * `WidgetsBindingObserver` is allowed only for app-resume refresh in `MainNavigationScreen` (§6.5).
->
-> 2. **Local Persistence: SQLite ONLY**
->    * **ALLOWED:** `sqflite` and `path`.
->    * **FORBIDDEN:** `hive`, `isar`, `drift`, `objectbox`, `sembast`, `shared_preferences`, `firebase_*`, `supabase_*`, or any other storage mechanism (including hand-written JSON/text files).
->    * Only `lib/services/database_helper.dart` may import `sqflite`/`path`. Only `MainNavigationScreen` may call `DatabaseHelper`. Screens and widgets NEVER touch the database directly.
->    * `DatabaseHelper` may be a singleton (connection holder, not shared game state).
->
-> 3. **Strict Directory Adherence**
->    * Do NOT create files or directories outside the tree in §3.
->    * **Allowed exceptions (generated/platform files):** `android/`, `ios/`, `test/`, `.gitignore`, and editing `android/app/src/main/AndroidManifest.xml` (INTERNET permission only, §10).
->    * Never commit the generated `.db` file.
->
-> 4. **Locked Dependencies**
->    * Only `flutter`, `http`, `intl`, `sqflite`, `path`. No extra packages without explicit request.
->    * SDK libraries (`dart:io`, `dart:async`, `dart:convert`, `package:flutter/services.dart`) are allowed.
->
-> 5. **Zero Layout Overflow Policy**
->    * Any screen or sheet containing a `TextField` **MUST** be scrollable (`SingleChildScrollView`). Bottom sheets with text fields MUST use `isScrollControlled: true` and bottom padding of `MediaQuery.of(context).viewInsets.bottom`.
->    * Never place a `ListView`/`GridView` inside a `SingleChildScrollView` without `shrinkWrap: true` + `NeverScrollableScrollPhysics()` (or use a plain `Column`).
->    * Never place a scrollable inside a `Column` without `Expanded`/`SizedBox` bounds.
->
-> 6. **Localization / UI Text Language**
->    * Code, comments, models, variable names, enum values, **and database table/column names** MUST be in English.
->    * User-facing UI labels, monster names, category labels, dialogs, SnackBars, and error messages MUST be in Indonesian (e.g. *"Makan"*, *"Catat Tabungan"*, *"Rp "*).
->
-> 7. **Do Not Change Contracts**
->    * Do NOT rename or alter models (§4), the database schema (§5.1), constructor signatures (§6.3), or constants/formulas (§7). If a change is needed, update this PRD first and notify the team.
->
-> 8. **Secrets**
->    * NEVER commit a real API key. Use `--dart-define` (§10).
->
-> 9. **Offline-First Rule**
->    * Only `QuestScreen` and `NewsService` may use the network. The app MUST start and be fully playable in airplane mode. Never `await` a network call during startup.
->
-> 10. **Data Integrity Rule**
->     * Every change that touches more than one table or row MUST run inside a single `db.transaction(...)`.
->     * **Write-through order:** compute new values → `await` the database write → only then `setState()`. If the database write throws, memory and UI stay unchanged and a SnackBar *"Gagal menyimpan data. Coba lagi."* is shown.
->
-> 11. **Single Source of Game Math**
->     * All game formulas (damage, overage, HP loss, healing, level-down) are implemented ONLY as static functions in `game_rules.dart` (§7.9) and reused by both the parent logic and the UI preview. No duplicated formulas in widgets.
+> 1. **State management: `ChangeNotifier` + `provider` ONLY (P12 architecture).** ALLOWED: `provider` with a single `GameStore extends ChangeNotifier` (`lib/state/game_store.dart`). FORBIDDEN: `bloc`, `flutter_bloc`, `riverpod`, `get`, `mobx`, creating extra `ChangeNotifier`/`ValueNotifier` classes, or global mutable variables. In UI widgets, read reactive state with `context.select<GameStore, T>((s) => s.field)` (or a `Selector<GameStore, T>`) for only the field(s) the widget needs; use a plain `context.watch<GameStore>()` only in small leaf widgets that need most of the store; use `context.read<GameStore>().method()` inside callbacks (`onPressed`, `onSubmitted`). `GameStore` receives its dependencies (`GameRepository`, `NotificationService`, `AuthService`) through the constructor and never creates them itself, so it can be unit-tested with fakes. `GameStore` must be safe after `dispose()` (no state change and no `notifyListeners()` afterwards). Local UI-only state (`TextEditingController`, `_isSubmitting`, bottom-nav `_currentIndex`, countdown `Timer`) stays in `StatefulWidget` + `setState()`.
+> 2. **Backend: Firebase only.** ALLOWED: `firebase_core`, `firebase_auth`, `cloud_firestore`. FORBIDDEN: `sqflite`, `hive`, `isar`, `drift`, `objectbox`, `sembast`, `shared_preferences`, `supabase_*`, hand-written JSON/text files. Firestore's own offline cache is the only local persistence. Do NOT store tokens manually: the Firebase SDK keeps the session securely (Keystore/Keychain).
+> 3. **Service & Store boundaries:** only `lib/services/*.dart` may import `firebase_*`, `cloud_firestore`, `flutter_local_notifications`, `timezone`, or `http`. Auth screens (`login_screen`, `register_screen`, `auth_gate`) may call `AuthService`. **Only `GameStore` (`lib/state/game_store.dart`) may call `GameRepository` and `NotificationService`.** Screens and widgets NEVER call `GameRepository` or `NotificationService` directly — they only read/call `GameStore` via `provider`.
+> 4. **Strict directory adherence:** no files outside the tree in §3. Allowed generated/platform files: `android/`, `ios/`, `test/`, `.gitignore`, `firebase.json`, `.firebaserc`, `lib/firebase_options.dart`, and the Android manifest/Gradle edits listed in §12.
+> 5. **Locked dependencies:** `flutter`, `provider`, `http`, `intl`, `firebase_core`, `firebase_auth`, `cloud_firestore`, `flutter_local_notifications`, `timezone`, `cached_network_image`. No others without explicit request. SDK libraries (`dart:async`, `dart:convert`, `dart:io`, `package:flutter/services.dart`) are allowed.
+> 6. **Zero layout overflow & responsive:** every screen/sheet with a `TextField` must be scrollable (`SingleChildScrollView`; sheets use `isScrollControlled: true` + `viewInsets.bottom` padding). No `ListView` inside `SingleChildScrollView` without `shrinkWrap: true` + `NeverScrollableScrollPhysics()`. No scrollable inside `Column` without bounds. Every screen body is wrapped in `ResponsiveBody` (max width 600, centered) so tablets look correct.
+> 7. **Language:** code, comments, enum values, Firestore field names in English. All user-facing text (labels, monster/category names, dialogs, SnackBars, validation and error messages) in Indonesian.
+> 8. **Do not change contracts:** models (§4), Firestore schema (§5.2), `GameStore` & widget signatures (§7.2–7.3), constants/formulas (§8). Update this PRD first, then notify the team.
+> 9. **Never await a Firestore write acknowledgement in the UI path.** While offline, `batch.commit()` / `set()` Futures complete only when the server acknowledges. Pattern inside `GameStore`: compute → mutate local fields → `notifyListeners()` → call `_save()` **without `await`** (which catches async errors) → the snapshot listener reconciles. Awaiting would freeze buttons offline.
+> 10. **Single source of game math:** all formulas live as static members in `game_rules.dart` (§8.9) and are reused by `GameStore` and UI previews. No duplicated formulas in widgets.
+> 11. **Secrets:** never commit a real NewsAPI key; use `--dart-define` (§10, §12). `firebase_options.dart` contains client config (not secret); access is protected by Security Rules (§5.3).
+> 12. **Team rules (from P13):** one feature = one folder under `screens/`; split any widget over ~150 lines; one Git branch per feature with pull requests; run `flutter analyze` before every commit; use `const` constructors wherever possible.
 
 ### Official Dependencies (`pubspec.yaml`)
 
@@ -81,7 +113,7 @@
 name: finquest
 description: "Gamified Personal Finance Application"
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.0+1          # number after '+' MUST increase with every release upload
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -89,15 +121,16 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  sqflite: ^2.3.0     # Local offline SQLite database
-  path: ^1.9.0        # Builds the local database file path
-  http: ^1.2.0        # REST API calls to NewsAPI (Quest only)
-  intl: ^0.19.0       # Indonesian Rupiah currency and date formatting
+  http: ^1.2.0                    # NewsAPI (Quest)
+  intl: ^0.19.0                   # Rupiah and Indonesian date formatting
+  # Added with `flutter pub add` (do NOT hand-write versions; commit the generated lines):
+  # provider, firebase_core, firebase_auth, cloud_firestore,
+  # flutter_local_notifications, timezone, cached_network_image
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0   # If it conflicts with the team's Flutter SDK, use the version generated by `flutter create`
+  flutter_lints: ^3.0.0           # if it conflicts with the team's Flutter SDK, use the version from `flutter create`
 
 flutter:
   uses-material-design: true
@@ -105,7 +138,10 @@ flutter:
     - assets/images/
 ```
 
-> If `flutter pub get` reports a version conflict (e.g. on `path`), run `flutter pub add sqflite path` to let Flutter pick compatible versions, then update this PRD.
+Install command (run once, then commit `pubspec.yaml`/`pubspec.lock`):
+```bash
+flutter pub add provider firebase_core firebase_auth cloud_firestore flutter_local_notifications timezone cached_network_image
+```
 
 ---
 
@@ -113,42 +149,59 @@ flutter:
 
 ```text
 finquest/
-├── android/                         # generated by `flutter create .`
-├── ios/                             # generated by `flutter create .`
+├── README.md                        # how to run, folder structure, task division (P15)
+├── firestore.rules                  # copy of the Security Rules (§5.3)
+├── android/                         # generated
+├── ios/                             # generated
 ├── assets/
-│   └── images/                      # PNG files MUST be committed to Git
+│   └── images/                      # commit the PNGs
 │       ├── monster_kopi.png
 │       ├── monster_belanja.png
 │       └── monster_ongkir.png
 ├── lib/
 │   ├── main.dart
+│   ├── firebase_options.dart        # generated by `flutterfire configure`
 │   ├── core/
 │   │   ├── constants/
 │   │   │   ├── api_endpoints.dart
 │   │   │   ├── app_colors.dart
 │   │   │   └── game_rules.dart      # constants + pure game-math functions
 │   │   ├── theme/
-│   │   │   └── app_theme.dart
+│   │   │   └── app_theme.dart       # AppTheme.light and AppTheme.dark (Material 3)
 │   │   └── utils/
-│   │       └── formatters.dart
+│   │       ├── formatters.dart
+│   │       └── validators.dart
 │   ├── models/
 │   │   ├── monster.dart
-│   │   ├── character.dart           # CHANGED: hp, maxHp
-│   │   ├── transaction_record.dart  # CHANGED: ExpenseCategory + category
+│   │   ├── character.dart
+│   │   ├── transaction_record.dart
 │   │   ├── article.dart
-│   │   ├── budget.dart              # NEW
-│   │   └── game_results.dart        # CHANGED: SavingResult, ExpenseResult, ArticleClaimResult
+│   │   ├── budget.dart
+│   │   ├── game_results.dart
+│   │   └── game_state.dart          # DTO between GameRepository and GameStore
 │   ├── services/
-│   │   ├── database_helper.dart
+│   │   ├── auth_service.dart
+│   │   ├── game_repository.dart     # single gateway to Firestore
+│   │   ├── notification_service.dart
 │   │   └── news_service.dart
+│   ├── state/
+│   │   └── game_store.dart          # P12 ChangeNotifier Store / ViewModel
 │   ├── screens/
+│   │   ├── auth/
+│   │   │   ├── auth_gate.dart
+│   │   │   ├── login_screen.dart
+│   │   │   └── register_screen.dart
 │   │   ├── main_navigation_screen.dart
 │   │   ├── arena/
 │   │   │   ├── arena_screen.dart
 │   │   │   └── widgets/
-│   │   │       ├── hero_status.dart        # NEW: hero level + HP bar + buff
+│   │   │       ├── hero_status.dart
 │   │   │       ├── monster_display.dart
 │   │   │       └── attack_form.dart
+│   │   ├── history/
+│   │   │   ├── history_screen.dart
+│   │   │   ├── transaction_detail_screen.dart
+│   │   │   └── transaction_edit_screen.dart
 │   │   ├── quest/
 │   │   │   ├── quest_screen.dart
 │   │   │   └── widgets/
@@ -157,22 +210,27 @@ finquest/
 │   │   └── profile/
 │   │       ├── profile_screen.dart
 │   │       └── widgets/
-│   │           └── budget_settings_sheet.dart   # NEW
+│   │           └── budget_settings_sheet.dart
 │   └── widgets/
-│       └── hp_bar.dart
-├── test/                            # optional, generated
+│       ├── hp_bar.dart
+│       └── responsive_body.dart
+├── test/
 └── pubspec.yaml
 ```
+
+> Mapping to the lecturer's P12 & P13 layered architecture:
+> * **UI layer:** `screens/<feature>` + `widgets/`
+> * **Store / ViewModel layer:** `state/game_store.dart` (`ChangeNotifier`)
+> * **Repository layer:** `services/game_repository.dart`
+> * **Service layer:** `services/auth_service.dart`, `services/news_service.dart`, `services/notification_service.dart`, plus Firebase SDK
 
 ---
 
 ## 4. Data Contract & Model Definitions
 
-> Models are plain Dart classes. **No `toMap`/`fromMap` inside models**: row mapping lives in `database_helper.dart`.
-> **Unchanged:** `Monster` (§4.1), `Article` (§4.4). **Changed:** `Character` (§4.2), `TransactionRecord` (§4.3). **New:** `Budget` (§4.5), result types (§4.6).
+> Models are plain Dart classes with **no `toMap`/`fromMap`**: mapping to Firestore lives in `game_repository.dart`.
 
-### 4.1. `lib/models/monster.dart` (UNCHANGED)
-
+### 4.1. `lib/models/monster.dart`
 ```dart
 class Monster {
   final String id;
@@ -193,8 +251,7 @@ class Monster {
 }
 ```
 
-### 4.2. `lib/models/character.dart` (CHANGED: `hp`, `maxHp` added)
-
+### 4.2. `lib/models/character.dart`
 ```dart
 import '../core/constants/game_rules.dart';
 
@@ -219,8 +276,7 @@ class Character {
 }
 ```
 
-### 4.3. `lib/models/transaction_record.dart` (CHANGED: `ExpenseCategory`, `category` added)
-
+### 4.3. `lib/models/transaction_record.dart`
 ```dart
 enum TransactionType { expense, saving }
 
@@ -245,9 +301,9 @@ extension ExpenseCategoryLabel on ExpenseCategory {
 }
 
 class TransactionRecord {
-  final String id;
+  final String id;                 // Firestore document id (generated client-side)
   final String description;
-  final double amount;
+  final double amount;             // whole Rupiah
   final TransactionType type;
   final DateTime date;
   final ExpenseCategory? category; // REQUIRED for expense, MUST be null for saving
@@ -266,8 +322,7 @@ class TransactionRecord {
 }
 ```
 
-### 4.4. `lib/models/article.dart` (UNCHANGED)
-
+### 4.4. `lib/models/article.dart`
 ```dart
 class Article {
   final String title;
@@ -299,8 +354,7 @@ class Article {
 }
 ```
 
-### 4.5. `lib/models/budget.dart` (NEW)
-
+### 4.5. `lib/models/budget.dart`
 ```dart
 import 'transaction_record.dart';
 
@@ -312,10 +366,7 @@ class Budget {
 }
 ```
 
-### 4.6. `lib/models/game_results.dart` (CHANGED)
-
-Result objects returned by parent callbacks so child screens can show feedback without touching shared state.
-
+### 4.6. `lib/models/game_results.dart`
 ```dart
 import 'transaction_record.dart';
 
@@ -339,9 +390,9 @@ class SavingResult {
 
 class ExpenseResult {
   final ExpenseCategory category;
-  final bool exceededLimit;            // true if this expense pushed spending further over the limit
-  final int hpLost;                    // hero HP lost (0 if within limit)
-  final int monsterHealed;             // monster HP healed (0 if within limit or adventure complete)
+  final bool exceededLimit;            // this expense pushed spending further over the limit
+  final int hpLost;
+  final int monsterHealed;             // 0 if within limit or adventure complete
   final int remainingToday;            // limit - spent today after this expense, never below 0
   final bool hpDepleted;               // hero HP reached 0 (level-down triggered)
   final bool leveledDown;              // level actually decreased (false when already Level 1)
@@ -362,183 +413,336 @@ class ExpenseResult {
 enum ArticleClaimResult { granted, alreadyClaimed, dailyLimitReached, buffAtMax }
 ```
 
----
-
-## 5. Persistence Layer
-
-### 5.1. Database schema (`finquest.db`, version 1)
-
-All identifiers in English. Booleans are `INTEGER` (0/1). Timestamps are ISO-8601 `TEXT`. Day keys are local dates formatted `'yyyy-MM-dd'`. Category values are the enum names (`food`, `transport`, `entertainment`, `shopping`, `other`).
-
-```sql
-CREATE TABLE character (
-  id          INTEGER PRIMARY KEY CHECK (id = 1),   -- single row
-  name        TEXT    NOT NULL,
-  gold        INTEGER NOT NULL DEFAULT 0,
-  exp         INTEGER NOT NULL DEFAULT 0,
-  level       INTEGER NOT NULL DEFAULT 1,
-  attack_buff INTEGER NOT NULL DEFAULT 0,
-  hp          INTEGER NOT NULL DEFAULT 100,         -- NEW
-  max_hp      INTEGER NOT NULL DEFAULT 100          -- NEW
-);
-
-CREATE TABLE monsters (
-  id                TEXT    PRIMARY KEY,            -- 'kopi' | 'belanja' | 'ongkir'
-  name              TEXT    NOT NULL,
-  max_hp            INTEGER NOT NULL,
-  current_hp        INTEGER NOT NULL,
-  asset_image_path  TEXT    NOT NULL,
-  sort_order        INTEGER NOT NULL                -- 0, 1, 2
-);
-
-CREATE TABLE game_state (
-  id                      INTEGER PRIMARY KEY CHECK (id = 1),   -- single row
-  current_monster_index   INTEGER NOT NULL DEFAULT 0,
-  is_adventure_complete   INTEGER NOT NULL DEFAULT 0,
-  last_regen_date         TEXT    NOT NULL                       -- NEW: 'yyyy-MM-dd' of last daily HP regen
-);
-
-CREATE TABLE transactions (
-  id           TEXT PRIMARY KEY,
-  description  TEXT NOT NULL,
-  amount       REAL NOT NULL,
-  type         TEXT NOT NULL CHECK (type IN ('expense', 'saving')),
-  category     TEXT,                                -- NEW: null for saving
-  date         TEXT NOT NULL,                       -- ISO-8601 (local time)
-  date_key     TEXT NOT NULL,                       -- NEW: 'yyyy-MM-dd' (local), for daily aggregation
-  CHECK (category IS NULL OR category IN ('food','transport','entertainment','shopping','other')),
-  CHECK ((type = 'expense' AND category IS NOT NULL) OR (type = 'saving' AND category IS NULL))
-);
-CREATE INDEX idx_transactions_date ON transactions (date DESC);
-CREATE INDEX idx_transactions_daily ON transactions (date_key, category);   -- NEW
-
-CREATE TABLE budgets (                              -- NEW
-  category      TEXT    PRIMARY KEY CHECK (category IN ('food','transport','entertainment','shopping','other')),
-  daily_limit   INTEGER NOT NULL CHECK (daily_limit >= 1000)
-);
-
-CREATE TABLE claimed_articles (
-  url            TEXT PRIMARY KEY,                  -- an article can be claimed only once, ever
-  claimed_date   TEXT NOT NULL                      -- local day 'yyyy-MM-dd', used for the daily quota
-);
-```
-
-**Seeding (`onCreate`):**
-* `character`: `name: 'Pahlawan Hemat'`, gold/exp 0, level 1, buff 0, `hp = max_hp = GameRules.heroMaxHp`.
-* `monsters`: from `DatabaseHelper.defaultMonsters()` (§6.2).
-* `game_state`: index `0`, complete `0`, `last_regen_date = todayKey()`.
-* `budgets`: one row per category from `GameRules.defaultDailyLimits` (§7). **Every category always has a limit row** (limits can be edited but not removed).
-
-**Migrations:** keep `version: 1` with an `onUpgrade` stub until the **first public release**. Because the schema changed after v3.0, developers must clear app data once (§10.9). From the first release onward, every schema change bumps the version and adds an `ALTER TABLE` step; never delete user data on upgrade.
-
-### 5.2. `lib/services/database_helper.dart`
-
-Responsibilities: open/create the DB, map rows ↔ models, and expose exactly these methods:
-
+### 4.7. `lib/models/game_state.dart`
+DTO read from / written to the user's Firestore document. The hero **name is not stored in Firestore**: it comes from the Firebase user's `displayName` (fallback: the part of the email before `@`) and is injected by `GameStore`.
 ```dart
-class GameSnapshot {
-  final Character character;
-  final List<Monster> monsters;                      // ordered by sort_order
+import 'character.dart';
+import 'monster.dart';
+import 'transaction_record.dart';
+
+class GameState {
+  final Character character;                         // name is a placeholder; GameStore overrides it
+  final List<Monster> monsters;                      // 3 monsters in fixed order, currentHp restored from the document
   final int currentMonsterIndex;
   final bool isAdventureComplete;
   final String lastRegenDate;                        // 'yyyy-MM-dd'
-  final List<TransactionRecord> recentTransactions;  // newest first, LIMIT GameRules.historyLimit
-  final double totalSaving;                          // SQL SUM over ALL saving rows
-  final double totalExpense;                         // SQL SUM over ALL expense rows
-  final Map<ExpenseCategory, int> budgets;           // daily limit per category (all 5 present)
-  final Map<ExpenseCategory, double> todaySpent;     // SUM of today's expenses per category (missing = 0)
-  final Map<String, String> claimedArticles;         // url -> claimed_date
-  // constructor with all fields required
+  final Map<ExpenseCategory, int> budgets;           // all 5 categories present
+  final String spentDayKey;                          // the day that todaySpent belongs to
+  final Map<ExpenseCategory, int> todaySpent;        // missing category = 0
+  final int totalSaving;                             // all-time, whole Rupiah
+  final int totalExpense;
+  final Map<String, String> claimedArticles;         // url -> claimed date 'yyyy-MM-dd'
+  final bool reminderEnabled;
+  final bool hasPendingWrites;                       // snapshot metadata: local writes not yet synced
+
+  GameState({
+    required this.character,
+    required this.monsters,
+    required this.currentMonsterIndex,
+    required this.isAdventureComplete,
+    required this.lastRegenDate,
+    required this.budgets,
+    required this.spentDayKey,
+    required this.todaySpent,
+    required this.totalSaving,
+    required this.totalExpense,
+    required this.claimedArticles,
+    required this.reminderEnabled,
+    required this.hasPendingWrites,
+  });
 }
 
-class DatabaseHelper {
-  static final DatabaseHelper instance = DatabaseHelper._();
-  DatabaseHelper._();
+// Wraps every emission of GameRepository.watchGameState() (same file).
+class GameStateEvent {
+  final GameState? state;     // null = the user document does not exist in what the listener currently sees
+  final bool isFromCache;     // snapshot metadata: true = served from the local cache, NOT confirmed by the server
 
-  static List<Monster> defaultMonsters();            // fresh monsters at full HP (§6.2)
-
-  Future<GameSnapshot> loadSnapshot();
-
-  // One transaction: update character row, update the given monster row,
-  // update game_state (index, complete flag, last_regen_date), insert [record]
-  // (date_key is derived from record.date).
-  Future<void> persistTurn({
-    required Character character,
-    required Monster monster,
-    required int currentMonsterIndex,
-    required bool isAdventureComplete,
-    required String lastRegenDate,
-    required TransactionRecord record,
-  });
-
-  // One transaction: update character.hp and game_state.last_regen_date.
-  Future<void> persistRegen({required Character character, required String lastRegenDate});
-
-  // One transaction: insert into claimed_articles and update character.attack_buff.
-  Future<void> persistArticleClaim({
-    required String url,
-    required String claimedDate,
-    required Character character,
-  });
-
-  // One transaction: upsert all given budgets.
-  Future<void> updateBudgets(Map<ExpenseCategory, int> budgets);
-
-  // One transaction: reset all monsters to max_hp, reset current index/complete flag.
-  // Character, transactions, budgets and claimed_articles are kept.
-  Future<void> restartAdventure();
+  const GameStateEvent({required this.state, required this.isFromCache});
 }
 ```
-
-Implementation requirements:
-
-* Open once and cache the `Future<Database>` (guard against concurrent opens): `join(await getDatabasesPath(), 'finquest.db')`.
-* Parameterized `db.insert/update/query` or `?` placeholders only. Never interpolate user text into SQL.
-* `TransactionRecord.type` stored as `type.name`; `category` as `category?.name`; parse with `Enum.values.byName`.
-* `date_key` is produced with `dateKey(record.date)` from `formatters.dart`.
-* Totals: `SELECT type, SUM(amount) AS total FROM transactions GROUP BY type`; missing type → `0`.
-* Today's spending: `SELECT category, SUM(amount) FROM transactions WHERE type = 'expense' AND date_key = ? GROUP BY category` with `todayKey()`.
-* Recent list: `ORDER BY date DESC LIMIT ?`.
-
-### 5.3. Startup flow
-
-1. `main()` → `WidgetsFlutterBinding.ensureInitialized()` → `await initializeDateFormatting('id_ID')` → `runApp`. No network calls.
-2. `MainNavigationScreen.initState()` calls `_loadSnapshot()` with `_isLoading = true`.
-3. While loading: `Scaffold` with centered `CircularProgressIndicator`.
-4. On failure: centered *"Gagal memuat data. Coba lagi."* + **"Coba Lagi"** button re-running `_loadSnapshot()`.
-5. On success: fill the in-memory state (§6.2), then run the **daily rollover** (§6.5). If hero HP was regenerated, persist it with `persistRegen` (on failure: skip silently; it is retried on the next action).
-6. Show the `NavigationBar` + `IndexedStack`.
 
 ---
 
-## 6. State Ownership & Constructor Contracts
+## 5. Firebase Data Layer
 
-### 6.1. Principle
+### 5.1. Firebase project (one shared project for the whole team)
+1. Create a Firebase project (Spark/free plan is sufficient).
+2. **Authentication → Sign-in method → Email/Password: enable.**
+3. **Firestore Database:** create in production mode, location `asia-southeast2` (Jakarta), then publish the rules in §5.3.
+4. Register the Android app with the **exact applicationId** used by the project (§12.2). Add teammates as project members.
+5. Run `flutterfire configure` (§12.4) to generate `lib/firebase_options.dart` and the Android config.
 
-SQLite is the **source of truth**. `MainNavigationScreen` holds an **in-memory copy** (loaded at startup) and keeps it in sync via the write-through rule (guardrail #10). Child screens receive data via constructors and request changes via **async callbacks**; they never mutate shared objects and never call the database.
+### 5.2. Firestore data model (all paths are per signed-in user)
 
-### 6.2. State owned by `_MainNavigationScreenState`
+**Document `users/{uid}`** (one document holds profile-less game state; ~1 KB):
 
+| Field | Type | Notes |
+|---|---|---|
+| `gold`, `exp`, `level`, `attackBuff` | int | character |
+| `hp`, `maxHp` | int | hero HP |
+| `monsterHp` | map<string,int> | `{kopi, belanja, ongkir}` current HP (max HP and names are code constants) |
+| `currentMonsterIndex` | int | 0..2 |
+| `isAdventureComplete` | bool | |
+| `lastRegenDate` | string | `'yyyy-MM-dd'` |
+| `budgets` | map<string,int> | keys `food, transport, entertainment, shopping, other`; each ≥ 1000 |
+| `spentDayKey` | string | day that `spentToday` belongs to |
+| `spentToday` | map<string,int> | category name → Rupiah spent that day |
+| `totalSaving`, `totalExpense` | int | running all-time totals (aggregation queries are online-only, so totals are stored) |
+| `claimedArticles` | array<map> | items `{url: string, date: 'yyyy-MM-dd'}` |
+| `reminderEnabled` | bool | |
+| `createdAt` | timestamp | |
+
+**Sub-collection `users/{uid}/transactions/{txId}`** (`txId` = `collection.doc().id`, generated client-side so it works offline):
+
+| Field | Type | Notes |
+|---|---|---|
+| `description` | string | ≤ 100 chars |
+| `amount` | int | whole Rupiah, > 0 (store `amount.round()`) |
+| `type` | string | `'expense'` or `'saving'` |
+| `category` | string? | category enum name for expense; field absent/null for saving |
+| `date` | timestamp | |
+| `dateKey` | string | `'yyyy-MM-dd'` local day of `date` |
+
+**Defaults for a new user document:** `gold 0, exp 0, level 1, attackBuff 0, hp = maxHp = 100`, `monsterHp` all at full (300/800/1500), index 0, not complete, `lastRegenDate = today`, `budgets = GameRules.defaultDailyLimits`, `spentDayKey = today`, `spentToday = {}`, totals 0, `claimedArticles = []`, `reminderEnabled = false`.
+
+### 5.3. Security Rules (`firestore.rules`)
+```text
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read, create, update: if isOwner(uid);
+      allow delete: if false;
+
+      match /transactions/{txId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.amount is int
+          && request.resource.data.amount > 0
+          && request.resource.data.type in ['expense', 'saving']
+          && (!('category' in request.resource.data)
+              || request.resource.data.category == null
+              || request.resource.data.category in ['food', 'transport', 'entertainment', 'shopping', 'other'])
+          && request.resource.data.description is string
+          && request.resource.data.description.size() <= 100;
+      }
+    }
+    // everything else is denied by default
+  }
+}
+```
+Backend validation covers only structure and ownership; game math is computed on the client (§16).
+
+### 5.4. `lib/services/game_repository.dart`: the single gateway to Firestore
 ```dart
-bool _isLoading = true;
-bool _hasLoadError = false;
-int _currentIndex = 0;
+class GameRepository {
+  GameRepository(this.uid);
+  final String uid;
 
-late Character _character;
-late List<Monster> _monsters;
-late int _monsterIndex;
-late bool _isAdventureComplete;
-late String _lastRegenDate;                         // 'yyyy-MM-dd'
-late List<TransactionRecord> _recentTransactions;   // newest first, max GameRules.historyLimit
-late double _totalSaving;
-late double _totalExpense;
-late Map<ExpenseCategory, int> _budgets;            // daily limit per category
-late Map<ExpenseCategory, double> _todaySpent;      // today's spending per category
-late String _spentDayKey;                           // the day that _todaySpent belongs to
-late Map<String, String> _claimedArticles;          // url -> 'yyyy-MM-dd'
+  static List<Monster> defaultMonsters();                     // fresh monsters at full HP (§7.2 table)
+
+  // users/{uid} snapshots (includeMetadataChanges: true so hasPendingWrites and isFromCache are available).
+  // Every emission is a GameStateEvent: state == null means "document missing in what the listener sees",
+  // isFromCache tells whether the server has confirmed that.
+  Stream<GameStateEvent> watchGameState();
+
+  // Creates the default user document ONLY IF it does not exist yet (Firestore transaction: get, then set).
+  // GameStore calls it only after an event with state == null && isFromCache == false.
+  // It must never overwrite an existing document. Transactions are online-only, which is acceptable
+  // because the server-confirmed event proves connectivity.
+  Future<void> createDefaultDocument();
+
+  // users/{uid}/transactions ordered by date desc, limit GameRules.historyLimit.
+  Stream<List<TransactionRecord>> watchRecentTransactions();
+
+  String newTransactionId();                                   // transactions.doc().id
+
+  // ONE WriteBatch: write all fields of [state] to users/{uid} (merge), plus at most one
+  // transaction operation. Callers MUST NOT await the returned Future in the UI path (guardrail #9).
+  Future<void> save(
+    GameState state, {
+    TransactionRecord? upsertTransaction,    // create or overwrite users/{uid}/transactions/{id}
+    String? deleteTransactionId,
+  });
+}
+```
+Implementation requirements:
+* Map enum names and `Timestamp` here; models stay Firestore-free.
+* `monsterHp` is written as a whole map; `budgets`, `spentToday`, and `claimedArticles` are written as whole values (no dotted-path increments, no `FieldValue.increment`): the in-memory state of the single active device is authoritative.
+* `amount` is written as `int` (`amount.round()`); read back with `(value as num).toDouble()`.
+* `GameStateEvent.isFromCache` and `GameState.hasPendingWrites` come from `snapshot.metadata`. A missing document with `isFromCache == true` is **not** proof that the user is new (for example a fresh install that is offline), so defaults must never be created from it.
+* If the history query needs an index, Firestore logs a link; a single-field `date` order does not.
+
+### 5.5. Offline behavior
+* Firestore persistence is enabled by default on Android/iOS: reads are served from the local cache, writes are queued and synced when online.
+* Snapshot listeners fire immediately for local writes (latency compensation); if the server later rejects a write (Security Rules), the listener automatically reverts to server state.
+* `hasPendingWrites == true` means data is saved on the device but not yet synced; the Arena shows a small chip *"Menunggu sinkronisasi"* (P2).
+* **Limitation:** one active device per account (last write wins).
+
+### 5.6. Startup flow (after login)
+1. When `AuthGate` detects a signed-in `User`, it creates the `GameStore` through `ChangeNotifierProxyProvider0<GameStore>` (§6.2) with injected `GameRepository(uid)`, `NotificationService.instance`, and `AuthService()`, then calls `init()`.
+2. `GameStore.init()` subscribes to `_repo.watchGameState()` and `_repo.watchRecentTransactions()`. `isLoadingState = true`, `isLoadingTransactions = true`.
+3. While `isLoadingState`: `MainNavigationScreen` renders a centered `CircularProgressIndicator` with text *"Memuat data…"*. After 10 s without data, additionally show *"Menunggu koneksi untuk memuat data pertama kali…"*.
+4. First event with `state != null` → fill `GameStore` fields (§7.2) → run `checkDailyRollover()` (§7.5) → if the reminder is enabled, ensure it is scheduled (§11) → `notifyListeners()`.
+5. If an event arrives with `state == null && isFromCache == false` (server-confirmed missing) → `_repo.createDefaultDocument()` (create-if-absent); the listener then delivers the new state. An event with `state == null && isFromCache == true` is ignored: keep showing the loading state.
+6. On stream error: `hasLoadError = true`, `notifyListeners()`; `MainNavigationScreen` shows centered *"Gagal memuat data. Coba lagi."* + **"Coba Lagi"** (`context.read<GameStore>().retryLoad()`).
+
+---
+
+## 6. Authentication (Firebase Auth, email + password)
+
+### 6.1. `lib/services/auth_service.dart`
+```dart
+class AuthException implements Exception {
+  final String message;                  // Indonesian, user-facing
+  AuthException(this.message);
+  @override
+  String toString() => message;
+}
+
+class AuthService {
+  Stream<User?> userChanges();           // FirebaseAuth.instance.userChanges()
+  User? get currentUser;
+  Future<void> signIn(String email, String password);                       // throws AuthException
+  Future<void> register(String displayName, String email, String password); // createUser + updateDisplayName; throws AuthException
+  Future<void> sendPasswordReset(String email);                              // P2
+  Future<void> signOut();
+}
 ```
 
-`DatabaseHelper.defaultMonsters()` (seeding and restart), fixed order:
+### 6.2. Behavior
+* **Token/session:** handled by the Firebase SDK (ID token + refresh token stored in Android Keystore / iOS Keychain). The app never reads, logs, or stores tokens itself. If a request fails with an invalid-session error, the SDK signs the user out and `AuthGate` returns to Login.
+* **Offline:** the cached session opens the app offline. Login/register require internet; if offline show *"Tidak ada koneksi internet. Login membutuhkan internet."*.
+* **`AuthGate`:** `StreamBuilder<User?>(stream: AuthService().userChanges())`:
+  * waiting → splash (logo + `CircularProgressIndicator`);
+  * `null` → `const LoginScreen()`;
+  * user → `ChangeNotifierProxyProvider0<GameStore>(key: ValueKey(user.uid), create: (_) => GameStore(uid: user.uid, displayName: heroNameOf(user), email: user.email ?? '', repository: GameRepository(user.uid), notifications: NotificationService.instance, authService: AuthService())..init(), update: (_, store) => store!..updateProfile(displayName: heroNameOf(user), email: user.email ?? ''), child: const MainNavigationScreen())`, where `heroNameOf(user)` is the trimmed `displayName` if not empty, otherwise the part of the email before `@`, otherwise `'Pahlawan'`.
+  * **Why `ChangeNotifierProxyProvider0`:** after registration `createUser` emits a user without a display name, and `updateDisplayName` emits a second `userChanges()` event. `update` runs on every rebuild and keeps the same store instance while refreshing the hero name, so no restart is needed. `updateProfile` calls `notifyListeners()` only if a value changed.
+* **Logout:** from Profile with a confirmation dialog (*"Keluar dari akun?"*). Calls `context.read<GameStore>().logout()`, which cancels subscriptions and notifications, then signs out through the injected `AuthService`.
+
+### 6.3. Screens
+* **`LoginScreen`:** `Form` with email and password fields (password hidden with a visibility toggle), **"Masuk"** `FilledButton` (disabled + spinner while loading), link **"Belum punya akun? Daftar"** → `RegisterScreen`. Wrapped in `SingleChildScrollView` + `ResponsiveBody`. Errors shown in a SnackBar or inline text.
+* **`RegisterScreen`:** fields *Nama Pahlawan*, *Email*, *Kata Sandi*, *Konfirmasi Kata Sandi*; **"Daftar"** button. On success `AuthGate` switches automatically. Back button returns to Login.
+
+### 6.4. Validators (`lib/core/utils/validators.dart`)
+| Function | Rule | Message (Indonesian) |
+|---|---|---|
+| `validateEmail` | required; simple pattern `x@y.z` | *Email wajib diisi* / *Format email tidak valid* |
+| `validatePassword` | required; ≥ 6 chars | *Kata sandi wajib diisi* / *Kata sandi minimal 6 karakter* |
+| `validateConfirmPassword` | equals password | *Konfirmasi kata sandi tidak sama* |
+| `validateDisplayName` | 2–20 chars after trim | *Nama pahlawan 2–20 karakter* |
+| `validateAmount` | digits only, > 0 | *Masukkan nominal lebih dari 0* |
+
+### 6.5. Firebase error → message mapping
+| `FirebaseAuthException.code` | Message (Indonesian) |
+|---|---|
+| `invalid-email` | Format email tidak valid. |
+| `user-not-found`, `wrong-password`, `invalid-credential` | Email atau kata sandi salah. |
+| `email-already-in-use` | Email sudah terdaftar. Silakan masuk. |
+| `weak-password` | Kata sandi terlalu lemah (minimal 6 karakter). |
+| `network-request-failed` | Tidak ada koneksi internet. Login membutuhkan internet. |
+| `too-many-requests` | Terlalu banyak percobaan. Coba lagi beberapa saat lagi. |
+| `user-disabled` | Akun ini dinonaktifkan. |
+| any other | Terjadi kesalahan. Coba lagi. |
+
+---
+
+## 7. State Management (`GameStore` with `ChangeNotifier` + `provider`)
+
+### 7.1. Principle (Matches P12 Architecture: UI → Store/ViewModel → Repository → Service)
+Firestore (with its offline cache) is the persistence source of truth. **`GameStore extends ChangeNotifier`** (`lib/state/game_store.dart`) is the single application store: it subscribes to `GameRepository` streams, holds the in-memory copy that is replaced by every snapshot, applies **optimistic local updates**, calls `notifyListeners()`, and writes to Firestore without awaiting in the UI path (guardrail #9).
+
+* **In `build()` methods:** read only what the widget needs with `context.select<GameStore, T>((s) => s.field)` (or a `Selector<GameStore, T>`), e.g. `context.select((GameStore s) => s.budgets)`. Use a plain `context.watch<GameStore>()` only in small leaf widgets that use most of the store. Reason: `MainNavigationScreen` keeps all four tabs alive in an `IndexedStack`, so a blanket `watch` rebuilds every tab on every notification (and one Firestore write can produce two snapshot events). `const` constructors do not prevent this because the `watch` happens inside the widget.
+* **Copy-on-change publishing:** `select` compares values, and `Character`/`Monster` are mutable models that stay unchanged (§4). Before `notifyListeners()`, the store therefore replaces `_character` and the affected monster with fresh copies (private helpers `_copyCharacter`/`_copyMonster` in `game_store.dart`) and replaces every exposed collection (`budgets`, `todaySpent`, `recentTransactions`, `claimedArticleUrls`) with a new unmodifiable instance. Collections and models are never mutated in place after they were published. Getters return the stored instance (not a new wrapper each call).
+* **Change-only notifications:** when a snapshot arrives, `GameStore` calls `notifyListeners()` only if the mapped data or `hasPendingWrites` actually changed; metadata-only duplicates are dropped.
+* **Safe after `dispose()`:** `GameStore` keeps `bool _disposed = false` and overrides `notifyListeners()` to do nothing when `_disposed` is true; `dispose()` sets the flag first. All stream callbacks, `_save()` error handlers, and async actions check the flag before touching state. (After logout the provider disposes the store while `_save().catchError` callbacks may still fire.)
+* **In event handlers (`onPressed`, `onSubmitted`):** use `context.read<GameStore>().method(...)` so the widget only triggers the action without subscribing inside a callback.
+* Child screens never mutate objects returned by `GameStore` directly and never import Firebase or `GameRepository`.
+
+### 7.2. `lib/state/game_store.dart` Contract
+```dart
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import '../models/article.dart';
+import '../models/character.dart';
+import '../models/game_results.dart';
+import '../models/monster.dart';
+import '../models/transaction_record.dart';
+import '../services/auth_service.dart';
+import '../services/game_repository.dart';
+import '../services/notification_service.dart';
+
+class GameStore extends ChangeNotifier {
+  GameStore({
+    required this.uid,
+    required String displayName,
+    required String email,
+    required GameRepository repository,          // injected: tests pass a fake (class FakeRepo implements GameRepository)
+    required NotificationService notifications,  // injected
+    required AuthService authService,            // injected
+  })  : _displayName = displayName,
+        _email = email,
+        _repo = repository,
+        _notifications = notifications,
+        _auth = authService;
+
+  final String uid;
+  String get displayName => _displayName;        // updated via updateProfile()
+  String get email => _email;
+
+  // --- Read-only getters for UI (read via context.select<GameStore, T>(...) / Selector) ---
+  bool get isLoadingState;
+  bool get isLoadingTransactions;
+  bool get hasLoadError;
+  bool get hasPendingWrites;
+  String? get lastSyncErrorMessage;   // non-null when an async _save() failed; cleared via clearSyncError()
+
+  Character get character;
+  Monster get currentMonster;
+  bool get isAdventureComplete;
+  Map<ExpenseCategory, int> get budgets;
+  Map<ExpenseCategory, int> get todaySpent;
+  int get totalSaving;
+  int get totalExpense;
+  Set<String> get claimedArticleUrls;
+  int get claimsToday;
+  bool get reminderEnabled;
+  List<TransactionRecord> get recentTransactions; // newest first, max GameRules.historyLimit
+
+  // --- Lifecycle ---
+  void init();                        // subscribes to watchGameState & watchRecentTransactions (§5.6)
+  void retryLoad();                   // re-subscribes after a stream error
+  void checkDailyRollover();          // §7.5, also called by MainNavigationScreen on app resume
+  void clearSyncError();
+  void updateProfile({required String displayName, required String email}); // refreshes the hero name; notifies only if changed
+
+  // --- Actions (call via context.read<GameStore>().method()) ---
+  Future<SavingResult?> recordSaving(double amount, String description);
+  Future<ExpenseResult?> recordExpense(double amount, String description, ExpenseCategory category);
+  Future<bool> updateTransaction(
+    TransactionRecord original,
+    double amount,
+    String description,
+    ExpenseCategory? category,
+  );
+  Future<bool> deleteTransaction(TransactionRecord record);
+  Future<bool> restoreTransaction(TransactionRecord record); // undo delete
+  Future<void> restartAdventure();
+  Future<ArticleClaimResult> claimArticle(Article article);
+  Future<bool> updateBudgets(Map<ExpenseCategory, int> newBudgets);
+  Future<bool> toggleReminder(bool enabled);                 // false = permission denied / failed
+  Future<void> logout();
+
+  @override
+  void dispose();                     // sets _disposed = true, then cancels _stateSub and _txSub
+}
+```
+
+`GameRepository.defaultMonsters()` (fixed order):
 
 | # | id | name (UI) | maxHp | asset |
 |---|---|---|---|---|
@@ -546,128 +750,113 @@ late Map<String, String> _claimedArticles;          // url -> 'yyyy-MM-dd'
 | 2 | `belanja` | Monster Belanja Impulsif | 800 | `assets/images/monster_belanja.png` |
 | 3 | `ongkir` | Monster Ongkir Makanan | 1500 | `assets/images/monster_ongkir.png` |
 
-`currentHp` starts equal to `maxHp`.
+### 7.3. Constructor Signatures (MUST be followed exactly)
+Because screens read state with `context.select<GameStore, T>(...)` and trigger actions via `context.read<GameStore>()`, screen constructors are clean and `const`-friendly:
 
-### 6.3. Constructor signatures (MUST be followed exactly)
+> **Reading convention for the screen specs below:** wherever a spec says a widget "watches `GameStore`", it means the widget reads the listed fields reactively with `context.select`/`Selector` (§7.1), not a blanket `context.watch`.
 
 ```dart
-// lib/screens/arena/arena_screen.dart  (StatelessWidget)
-ArenaScreen({
-  required Character character,
-  required Monster monster,                                   // current monster
-  required bool isAdventureComplete,
-  required Map<ExpenseCategory, int> budgets,
-  required Map<ExpenseCategory, double> todaySpent,
-  required Future<SavingResult?> Function(double amount, String description) onSaving,            // null = DB error
-  required Future<ExpenseResult?> Function(double amount, String description, ExpenseCategory category) onExpense, // null = DB error
-  required Future<void> Function() onRestartAdventure,
-})
+// lib/screens/auth/auth_gate.dart (StatelessWidget)
+const AuthGate({super.key})
+// lib/screens/auth/login_screen.dart (StatefulWidget; may call AuthService)
+const LoginScreen({super.key})
+// lib/screens/auth/register_screen.dart (StatefulWidget; may call AuthService)
+const RegisterScreen({super.key})
 
-// lib/screens/arena/widgets/hero_status.dart  (StatelessWidget)
-HeroStatus({ required Character character })
+// lib/screens/main_navigation_screen.dart (StatefulWidget; manages _currentIndex + WidgetsBindingObserver)
+const MainNavigationScreen({super.key})
 
-// lib/screens/arena/widgets/monster_display.dart  (StatelessWidget)
-MonsterDisplay({ required Monster monster })
+// lib/screens/arena/arena_screen.dart (StatelessWidget; watches GameStore)
+const ArenaScreen({super.key})
+// lib/screens/arena/widgets/hero_status.dart (StatelessWidget)
+const HeroStatus({super.key, required Character character})
+// lib/screens/arena/widgets/monster_display.dart (StatelessWidget)
+const MonsterDisplay({super.key, required Monster monster})
+// lib/screens/arena/widgets/attack_form.dart (StatefulWidget; watches budgets/todaySpent & calls GameStore)
+const AttackForm({super.key})
 
-// lib/screens/arena/widgets/attack_form.dart  (StatefulWidget, owns TextEditingControllers)
-AttackForm({
-  required Map<ExpenseCategory, int> budgets,                 // for the live limit hint / preview
-  required Map<ExpenseCategory, double> todaySpent,
-  required Future<void> Function(double amount, String description) onSaving,
-  required Future<void> Function(double amount, String description, ExpenseCategory category) onExpense,
-})
+// lib/screens/history/history_screen.dart (StatelessWidget; watches GameStore)
+const HistoryScreen({super.key})
+// lib/screens/history/transaction_detail_screen.dart (StatelessWidget; pushed with Navigator)
+const TransactionDetailScreen({super.key, required TransactionRecord record}) // pops with 'edited' | 'deleted' | null
+// lib/screens/history/transaction_edit_screen.dart (StatefulWidget; pushed with Navigator)
+const TransactionEditScreen({super.key, required TransactionRecord record})   // pops with true when saved
 
-// lib/screens/quest/quest_screen.dart  (StatefulWidget, owns the cached Future)
-QuestScreen({
-  required Character character,
-  required Set<String> claimedArticleUrls,
-  required int claimsToday,
-  required Future<ArticleClaimResult> Function(Article article) onArticleRead,
-})
+// lib/screens/quest/quest_screen.dart (StatefulWidget; watches GameStore + caches NewsService Future in initState)
+const QuestScreen({super.key})
+// lib/screens/quest/widgets/news_card.dart (StatelessWidget)
+const NewsCard({super.key, required Article article, required bool isClaimed, required VoidCallback onTap})
+// lib/screens/quest/widgets/article_reader_sheet.dart (StatefulWidget; owns the countdown Timer)
+const ArticleReaderSheet({super.key, required Article article, required bool isClaimed, required VoidCallback onClaim})
 
-// lib/screens/quest/widgets/news_card.dart  (StatelessWidget)
-NewsCard({ required Article article, required bool isClaimed, required VoidCallback onTap })
+// lib/screens/profile/profile_screen.dart (StatelessWidget; watches GameStore)
+const ProfileScreen({super.key})
+// lib/screens/profile/widgets/budget_settings_sheet.dart (StatefulWidget; owns controllers, calls GameStore.updateBudgets)
+const BudgetSettingsSheet({super.key, required Map<ExpenseCategory, int> initialBudgets})
 
-// lib/screens/quest/widgets/article_reader_sheet.dart  (StatefulWidget, owns the countdown Timer)
-ArticleReaderSheet({
-  required Article article,
-  required bool isClaimed,
-  required VoidCallback onClaim,
-})
-
-// lib/screens/profile/profile_screen.dart  (StatelessWidget)
-ProfileScreen({
-  required Character character,
-  required List<TransactionRecord> recentTransactions,        // latest 100
-  required double totalSaving,
-  required double totalExpense,
-  required Map<ExpenseCategory, int> budgets,
-  required Map<ExpenseCategory, double> todaySpent,
-  required Future<bool> Function(Map<ExpenseCategory, int> newBudgets) onUpdateBudgets,   // false = DB error
-})
-
-// lib/screens/profile/widgets/budget_settings_sheet.dart  (StatefulWidget, owns TextEditingControllers)
-BudgetSettingsSheet({
-  required Map<ExpenseCategory, int> budgets,
-  required Future<bool> Function(Map<ExpenseCategory, int> newBudgets) onSave,
-})
-
-// lib/widgets/hp_bar.dart  (StatelessWidget; reused for monster HP and hero HP)
-HpBar({ required int currentHp, required int maxHp })
+// lib/widgets/hp_bar.dart (StatelessWidget; monster and hero HP)
+const HpBar({super.key, required int currentHp, required int maxHp})
+// lib/widgets/responsive_body.dart (StatelessWidget)
+const ResponsiveBody({super.key, required Widget child, double maxWidth = 600}) // Center + ConstrainedBox
 ```
+`AttackForm` keeps `_isSubmitting`: both buttons are disabled while an action is pending. Check `mounted`/`context.mounted` after every `await`.
 
-Because `AttackForm` callbacks are asynchronous, it MUST keep a `_isSubmitting` flag: both buttons are disabled while a callback is pending (prevents double-tap duplicates). After every `await`, check `mounted`/`context.mounted` before using `context`.
+### 7.4. `GameStore` Action Logic
+All store actions run **synchronously from read to local apply** (no `await` between reading state and `notifyListeners()`), so rapid taps cannot interleave. Pattern: **`checkDailyRollover()` (§7.5) → compute on local fields → `notifyListeners()` → `_save(...)`** where
+```dart
+void _save({TransactionRecord? upsert, String? deleteId}) {
+  _repo
+      .save(_buildState(), upsertTransaction: upsert, deleteTransactionId: deleteId)
+      .catchError((Object e) {
+    if (_disposed) return;
+    _lastSyncErrorMessage = 'Gagal menyimpan ke server. Perubahan dibatalkan.';
+    notifyListeners();
+  });
+}
+```
+(never `await` `_save` in the UI path). All game math uses **integer Rupiah** (`amount.round()`). Field-level changes described below are applied to the fresh copies required by copy-on-change publishing (§7.1), never to objects already published.
 
-### 6.4. Parent callback logic (owned by `MainNavigationScreen`)
-
-All callbacks follow: **rollover check → compute on local copies → `await` DB → `if (!mounted) return` → `setState` to apply**. Wrap DB calls in `try/catch`; on error show the *"Gagal menyimpan data. Coba lagi."* SnackBar and return `null`/`false`. All game math uses **integer Rupiah** (`amount.round()`).
-
-* **`onSaving(amount, description)`**
-  1. Run the daily rollover (§6.5) on local copies.
-  2. Compute per §7.2: damage (0 if `_isAdventureComplete`; the buff is then **not** consumed), gold, exp, level, hero HP restore (§7.4). If new monster HP is 0 → apply the victory bonus (§7.5), recompute level, decide next state (`_monsterIndex + 1`, or `isAdventureComplete = true` with the index staying on the last monster).
-  3. Build `TransactionRecord(type: saving, category: null, id: DateTime.now().microsecondsSinceEpoch.toString(), date: DateTime.now())`.
-  4. `await persistTurn(...)`.
-  5. `setState`: apply to `_character`, the monster, index/complete flag, `_lastRegenDate`, `_recentTransactions.insert(0, record)` (trim to limit), `_totalSaving += amount`.
-  6. Return `SavingResult`.
-* **`onExpense(amount, description, category)`**
-  1. Run the daily rollover (§6.5) on local copies.
-  2. `limit = _budgets[category]`, `spentBefore = (_todaySpent[category] ?? 0).round()`, then `newOverage = GameRules.newOverage(limit, spentBefore, amountInt)` (§7.9).
-  3. If `newOverage == 0`: **no gameplay effect** (record only). Otherwise: `hpLost = GameRules.hpLoss(newOverage)`; `monsterHealed = _isAdventureComplete ? 0 : GameRules.monsterHeal(newOverage)` (clamped to the monster's `maxHp`).
-  4. Apply `hpLost` to hero HP. If HP ≤ 0 → level-down rule (§7.4) and HP refilled to `maxHp`.
-  5. Build the `TransactionRecord(type: expense, category: category, ...)`, `await persistTurn(...)` (monster row is rewritten even if unchanged).
-  6. `setState`: apply values, `_todaySpent[category] = spentBefore + amountInt`, add the record, `_totalExpense += amount`.
-  7. Return `ExpenseResult`.
-* **`onRestartAdventure()`**: `await restartAdventure()`, then `setState`: `_monsters = DatabaseHelper.defaultMonsters()`, `_monsterIndex = 0`, `_isAdventureComplete = false`.
-* **`onArticleRead(article)`**, evaluated in this exact order:
+* **`recordSaving(amount, description)`**
+  1. Compute per §8.2: damage (0 if `_isAdventureComplete`, buff then not consumed), gold, exp, level, hero HP restore (§8.4). If monster HP reaches 0 → victory bonus (§8.5), recompute level, next state (`_monsterIndex + 1`, or `_isAdventureComplete = true` with the index staying on the last monster).
+  2. Build `TransactionRecord(id: _repo.newTransactionId(), type: saving, category: null, date: DateTime.now(), ...)`.
+  3. Update character/monster/index/flags, `_totalSaving += amount.round()`, insert the record at the top of `_recentTransactions` (trim to `GameRules.historyLimit`), `notifyListeners()`.
+  4. `_save(upsert: record)`; return `SavingResult`.
+* **`recordExpense(amount, description, category)`**
+  1. `limit = _budgets[category]!`, `spentBefore = _todaySpent[category] ?? 0`, `newOverage = GameRules.newOverage(limit, spentBefore, amount.round())`.
+  2. `newOverage == 0` → no gameplay effect. Otherwise `hpLost = GameRules.hpLoss(newOverage)`; `monsterHealed = _isAdventureComplete ? 0 : GameRules.monsterHeal(newOverage)` (clamped to the monster's `maxHp`).
+  3. Apply `hpLost`; if HP ≤ 0 → level-down rule (§8.4), HP refilled to max.
+  4. Build the expense record (with category), replace `_todaySpent` with a copy in which `[category] = spentBefore + amount.round()`, `_totalExpense += amount.round()`, insert into `_recentTransactions`, `notifyListeners()`, `_save(upsert: record)`; return `ExpenseResult`.
+* **`updateTransaction(original, amount, description, category)`** ("koreksi catatan"): `diff = amount.round() - original.amount.round()`; adjust `_totalSaving` or `_totalExpense` by `diff`; if `dateKey(original.date) == _spentDayKey` and it is an expense: subtract the old amount from the old category and add the new amount to the new category in `_todaySpent` (clamp ≥ 0). Type and date are not editable. Build the updated record (same `id`, `date`, `type`), replace in `_recentTransactions`, `notifyListeners()`, `_save(upsert: updated)`, return `true`. **No gameplay effect is recalculated** (HP, monster, gold, EXP, buff stay as they were).
+* **`deleteTransaction(record)`**: reverse totals and (if today's expense) `_todaySpent`; remove from `_recentTransactions`; `notifyListeners()`; `_save(deleteId: record.id)`; return `true`. No gameplay rollback.
+* **`restoreTransaction(record)`** (undo): re-apply totals/`_todaySpent`, re-insert into `_recentTransactions` in descending date order, `notifyListeners()`, `_save(upsert: record)`; return `true`.
+* **`restartAdventure()`**: `_monsters = GameRepository.defaultMonsters()`, `_monsterIndex = 0`, `_isAdventureComplete = false`; `notifyListeners()`; `_save()`.
+* **`claimArticle(article)`**, evaluated in this order:
   1. `today = todayKey()`.
   2. URL already in `_claimedArticles` → `alreadyClaimed`.
-  3. Claims with `claimed_date == today` ≥ `GameRules.dailyArticleQuota` → `dailyLimitReached`.
-  4. `attackBuff >= GameRules.maxAttackBuff` → `buffAtMax`.
-  5. Otherwise `await persistArticleClaim(...)` (new buff = old + `articleBuff`), then `setState` → `granted`.
-* **`onUpdateBudgets(newBudgets)`**: validate (each value ≥ `minDailyLimit`), `await updateBudgets(...)`, `setState(() => _budgets = {...newBudgets})`, return `true`; on error show the error SnackBar and return `false`. **Limit changes apply only to expenses logged afterwards** (no retroactive penalty or refund).
-* When building `QuestScreen`, pass `claimsToday` computed from `_claimedArticles` for today's key and `claimedArticleUrls: _claimedArticles.keys.toSet()`.
+  3. `claimsToday >= GameRules.dailyArticleQuota` → `dailyLimitReached`.
+  4. `_character.attackBuff >= GameRules.maxAttackBuff` → `buffAtMax`.
+  5. Otherwise `_character.attackBuff += GameRules.articleBuff`, `_claimedArticles[article.url] = today`, `notifyListeners()`, `_save()` → `granted`.
+* **`updateBudgets(newBudgets)`**: validate each value ≥ `minDailyLimit`, update `_budgets`, `notifyListeners()`, `_save()`, return `true`. Applies only to expenses logged afterwards.
+* **`toggleReminder(enabled)`**: see §11.
+* **`logout()`**: cancel `_stateSub` and `_txSub`, `await _notifications.cancelAll()`, `await _auth.signOut()`. The provider then disposes the store when `AuthGate` swaps to Login.
+* `claimsToday` getter returns the count of `_claimedArticles.values` equal to `todayKey()`.
 
-### 6.5. Daily rollover (`_rolloverIfNeeded`)
-
-Runs at startup (after load), at the beginning of `onSaving`/`onExpense`, and when the app resumes from background (`WidgetsBindingObserver.didChangeAppLifecycleState` → `resumed`; register in `initState`, remove in `dispose`).
-
+### 7.5. Daily rollover (`checkDailyRollover`)
+Runs inside `GameStore` after the first state load, at the start of `recordSaving`/`recordExpense`, and when the app resumes (`MainNavigationScreen` implements `WidgetsBindingObserver.didChangeAppLifecycleState` → on `AppLifecycleState.resumed`, calls `context.read<GameStore>().checkDailyRollover()`).
 ```
 today = todayKey()
-if _spentDayKey != today:
-    _todaySpent = {}            // new day, nothing spent yet
-    _spentDayKey = today
-if _lastRegenDate < today:      // string compare works for 'yyyy-MM-dd'
+if _spentDayKey != today:  _todaySpent = {}; _spentDayKey = today
+if _lastRegenDate < today: // string compare works for 'yyyy-MM-dd'
     days = DateTime.parse(today).difference(DateTime.parse(_lastRegenDate)).inDays
-    hp = min(maxHp, hp + days * GameRules.dailyHpRegen)
-    _lastRegenDate = today
+    hp = min(maxHp, hp + days * GameRules.dailyHpRegen); _lastRegenDate = today
 ```
-If the device date moves backward (`_lastRegenDate > today`), do nothing. On resume, if anything changed, persist with `persistRegen` and call `setState`.
+If the device date moves backward (`_lastRegenDate > today`), do nothing. If anything changed, `notifyListeners()` and `_save()`.
 
 ---
 
-## 7. Game Rules
+## 8. Game Rules (unchanged formulas)
 
-All numbers live in `lib/core/constants/game_rules.dart`; no magic numbers elsewhere.
+All numbers live in `lib/core/constants/game_rules.dart`.
 
 ```dart
 import '../../models/transaction_record.dart';
@@ -676,7 +865,7 @@ class GameRules {
   // --- Monster battle ---
   static const int rupiahPerDamage = 1000;   // Rp 1.000 saved = 1 damage
   static const int rupiahPerGold = 1000;     // Rp 1.000 saved = 1 gold
-  static const int baseExpPerSaving = 10;    // flat EXP per saving record
+  static const int baseExpPerSaving = 10;
   static const int rupiahPerBonusExp = 5000; // +1 EXP per Rp 5.000 saved
   static const int rupiahPerHeal = 2000;     // Rp 2.000 of NEW overage = 1 HP healed on the monster
   static const int victoryGold = 50;
@@ -687,8 +876,8 @@ class GameRules {
   static const int heroMaxHp = 100;
   static const int rupiahPerHpLoss = 1000;   // Rp 1.000 of NEW overage = 1 hero HP lost (min 1)
   static const int rupiahPerHpHeal = 5000;   // Rp 5.000 saved = 1 hero HP restored (min 1)
-  static const int dailyHpRegen = 25;        // hero HP regained per calendar day (lazy, §6.5)
-  static const int minDailyLimit = 1000;     // minimum allowed daily limit
+  static const int dailyHpRegen = 25;        // per calendar day (lazy, §7.5)
+  static const int minDailyLimit = 1000;
   static const Map<ExpenseCategory, int> defaultDailyLimits = {
     ExpenseCategory.food: 50000,
     ExpenseCategory.transport: 20000,
@@ -698,233 +887,198 @@ class GameRules {
   };
 
   // --- Daily mission ---
-  static const int articleBuff = 50;         // buff per newly claimed article
-  static const int maxAttackBuff = 150;      // cap on stored buff
-  static const int dailyArticleQuota = 3;    // max claims per local day
-  static const int readSeconds = 10;         // reading gate before a claim is allowed
+  static const int articleBuff = 50;
+  static const int maxAttackBuff = 150;
+  static const int dailyArticleQuota = 3;
+  static const int readSeconds = 10;
 
   // --- Misc ---
-  static const int historyLimit = 100;       // transactions kept in memory / shown in Profile
-
-  // Pure functions: see §7.9
+  static const int historyLimit = 100;
+  // Pure functions: §8.9
 }
 ```
 
-### 7.1. Monsters
-HP: Kopi Susu Mahal **300**, Belanja Impulsif **800**, Ongkir Makanan **1500**. Fixed order. `currentHp` is clamped to `0..maxHp`.
+### 8.1. Monsters
+HP: Kopi Susu Mahal **300**, Belanja Impulsif **800**, Ongkir Makanan **1500**; fixed order; `currentHp` clamped to `0..maxHp`.
 
-### 7.2. Saving ("Catat Tabungan"): player attacks
+### 8.2. Saving ("Catat Tabungan"): player attacks
 ```
 baseDamage = max(1, amount ~/ rupiahPerDamage)
 damage     = isAdventureComplete ? 0 : baseDamage + attackBuff
 newHp      = max(0, monster.currentHp - damage)          // skipped if complete
-attackBuff = isAdventureComplete ? attackBuff : 0        // buff is consumed by a real attack only
+attackBuff = isAdventureComplete ? attackBuff : 0        // consumed by a real attack only
 gold      += amount ~/ rupiahPerGold
 exp       += baseExpPerSaving + amount ~/ rupiahPerBonusExp
 level      = 1 + exp ~/ expPerLevel
-heroHp     = min(maxHp, heroHp + max(1, amount ~/ rupiahPerHpHeal))   // §7.4
+heroHp     = min(maxHp, heroHp + max(1, amount ~/ rupiahPerHpHeal))
 ```
-Feedback: SnackBar *"Serangan berhasil! Monster menerima {damage} damage."*, plus *" HP +{hpRestored}."* when `hpRestored > 0`, plus *" Naik level! Sekarang Level {level}."* if leveled up. If the adventure is complete: *"Tabungan tercatat! Semua monster sudah kalah."*
+SnackBar: *"Serangan berhasil! Monster menerima {damage} damage."* + *" HP +{hpRestored}."* (if > 0) + *" Naik level! Sekarang Level {level}."* (if leveled up). If the adventure is complete: *"Tabungan tercatat! Semua monster sudah kalah."*
 
-### 7.3. Expense ("Catat Pengeluaran") and the daily budget
-A user-defined daily limit exists per category (`budgets`). "Over the limit" means **strictly greater** than the limit (spending exactly the limit is fine).
-
+### 8.3. Expense ("Catat Pengeluaran") and daily budget
+"Over the limit" means **strictly greater** than the limit.
 ```
-spentBefore = today's total for this category, before this expense
-overBefore  = max(0, spentBefore - limit)
-overAfter   = max(0, spentBefore + amount - limit)
-newOverage  = overAfter - overBefore          // ONLY the newly exceeded part; never double-counted
+overBefore = max(0, spentBefore - limit)
+overAfter  = max(0, spentBefore + amount - limit)
+newOverage = overAfter - overBefore       // only the newly exceeded part
 ```
-
 | Case | Effect |
 |---|---|
-| `newOverage == 0` (within limit) | Logged only. No HP loss, no monster heal, no gold/EXP change |
+| `newOverage == 0` | Logged only: no HP loss, no monster heal, no gold/EXP change |
 | `newOverage > 0` | Hero loses `max(1, newOverage ~/ rupiahPerHpLoss)` HP; monster heals `max(1, newOverage ~/ rupiahPerHeal)` HP (0 if adventure complete) |
 
-Examples with the Makan limit of Rp 50.000:
-* Rp 30.000 → within limit (remaining Rp 20.000).
-* Then Rp 40.000 → total 70.000, `newOverage` = 20.000 → hero −20 HP, monster +10 HP.
-* Then Rp 10.000 → `newOverage` = 10.000 (not 30.000) → hero −10 HP, monster +5 HP.
+Example (Makan limit Rp 50.000): 30.000 → none (remaining 20.000); then 40.000 → `newOverage` 20.000 → hero −20 HP, monster +10; then 10.000 → `newOverage` 10.000 → hero −10, monster +5.
 
-Feedback:
-* Within limit: SnackBar *"Pengeluaran {category.label} tercatat. Sisa batas hari ini: {formatRupiah(remainingToday)}."*
-* Over limit: SnackBar *"Batas {category.label} harian terlampaui! HP kamu −{hpLost}, monster pulih +{monsterHealed}."* (omit the monster part when 0).
-* HP depleted: `showDialog` (§7.4).
+SnackBars: within limit *"Pengeluaran {label} tercatat. Sisa batas hari ini: {Rp}."*; over limit *"Batas {label} harian terlampaui! HP kamu −{hpLost}, monster pulih +{monsterHealed}."* (omit the monster part when 0).
 
-### 7.4. Hero HP, healing, regeneration & level-down
-* Hero HP range is `0..maxHp` (default 100/100).
-* **Healing sources:** saving records (§7.2) and daily regeneration (+`dailyHpRegen` per calendar day, lazy, capped at `maxHp`, §6.5).
-* **Level-down trigger:** after applying `hpLost`, if `hp <= 0`:
+### 8.4. Hero HP, healing, regeneration & level-down
+* HP range `0..maxHp` (default 100). Healing: saving records and daily regeneration (+25/day, capped).
+* **Trigger:** after applying `hpLost`, if `hp <= 0`:
   ```
-  if level > 1:
-      level = level - 1
-      exp   = (level - 1) * expPerLevel      // floor of the NEW (lower) level; progress inside the old level is lost
-      leveledDown = true
-  else:                                       // already Level 1
-      exp = 0
-      leveledDown = false
-  hp = maxHp                                  // full refill: prevents chained demotions in one day
-  hpDepleted = true
+  if level > 1: level -= 1; exp = (level - 1) * expPerLevel; leveledDown = true
+  else:         exp = 0; leveledDown = false
+  hp = maxHp; hpDepleted = true
   ```
-  Gold, monster progress, and attack buff are not affected. The invariant `level == 1 + exp ~/ expPerLevel` always holds.
-* **HP-depleted dialog** (`showDialog`, `barrierDismissible: false`, button *"Mengerti"*):
-  * Level dropped: *"HP kamu habis! Level turun ke Level {newLevel}. HP dipulihkan penuh."*
-  * Already Level 1: *"HP kamu habis! Kamu sudah di Level 1, jadi EXP direset ke 0. HP dipulihkan penuh."*
-* Overage damage left over after reaching 0 HP is discarded (HP is refilled to full).
+  Gold, monster progress, and buff are unaffected; leftover overage damage is discarded; invariant `level == 1 + exp ~/ expPerLevel` always holds.
+* **Dialog** (`showDialog`, not dismissible, button *"Mengerti"*): level dropped → *"HP kamu habis! Level turun ke Level {n}. HP dipulihkan penuh."*; already Level 1 → *"HP kamu habis! Kamu sudah di Level 1, jadi EXP direset ke 0. HP dipulihkan penuh."*
 
-### 7.5. Victory & end of game
-* Victory rewards (`victoryGold`, `victoryExp`) are applied **atomically in the same DB transaction** as the finishing blow, so progress is never lost if the app closes while the dialog is showing.
-* The Arena shows a victory dialog (`showDialog`, `barrierDismissible: false`) using `SavingResult.defeatedMonsterName`: *"Kamu mengalahkan {name}! Hadiah: +50 Gold, +50 EXP"*, button *"Lanjut"*.
-* After the last monster, the Arena shows the end-state card *"Semua Monster Boros Telah Dikalahkan!"* with **"Mulai Petualangan Baru"** (`onRestartAdventure`). **The attack form stays visible** in this state: budget tracking must keep working (saving still gives Gold/EXP/HP, deals no damage; expenses still cost HP, no monster heal).
+### 8.5. Victory & end of game
+* Victory rewards (`victoryGold`, `victoryExp`) are applied in the same local update and the same Firestore batch as the finishing blow.
+* Arena shows a victory dialog (not dismissible): *"Kamu mengalahkan {name}! Hadiah: +50 Gold, +50 EXP"*, button *"Lanjut"*.
+* After the last monster: end-state card *"Semua Monster Boros Telah Dikalahkan!"* + **"Mulai Petualangan Baru"** (`context.read<GameStore>().restartAdventure()`). **The attack form stays visible**: saving still gives Gold/EXP/HP without damage; expenses still cost HP without healing a monster.
 
-### 7.6. Daily Mission (news)
-* **Goal:** read up to **3 different articles per local day** (`dailyArticleQuota`); each claim gives **+50** attack buff.
-* An article (identified by `url`) can be claimed **only once, ever** (`claimed_articles` primary key).
-* Buff is stored in SQLite, stacks up to **+150**, persists across restarts, and is consumed by the next real saving attack, so it works **offline**.
-* The daily quota resets when the local date changes (changing the phone clock can bypass it; accepted, §13).
-* **Reading gate:** tapping an article opens `ArticleReaderSheet`; **"Klaim Buff"** is disabled for `readSeconds` (10 s) with a visible countdown (*"Baca dulu… 7 detik"*), then enabled.
-* Feedback messages:
+### 8.6. Daily Mission (news)
+* Up to **3 different articles per local day**; each claim gives **+50** buff; an article URL can be claimed **once, ever**; buff stacks to **+150**, is stored in Firestore, usable offline, and consumed by the next real saving attack.
+* **Reading gate:** tapping an article opens `ArticleReaderSheet`; **"Klaim Buff"** is disabled for 10 s with a countdown (*"Baca dulu… 7 detik"*).
+* SnackBars: `granted` *"Misi harian tercapai! Kamu mendapatkan Buff Serangan +50!"*; `alreadyClaimed` *"Artikel ini sudah kamu klaim. Cari artikel lain!"*; `dailyLimitReached` *"Misi harian hari ini sudah selesai (3/3). Kembali lagi besok!"*; `buffAtMax` *"Buff Serangan sudah maksimal (+150). Gunakan dulu untuk menyerang!"*
 
-| Result | SnackBar (Indonesian) |
-|---|---|
-| `granted` | Misi harian tercapai! Kamu mendapatkan Buff Serangan +50! |
-| `alreadyClaimed` | Artikel ini sudah kamu klaim. Cari artikel lain! |
-| `dailyLimitReached` | Misi harian hari ini sudah selesai (3/3). Kembali lagi besok! |
-| `buffAtMax` | Buff Serangan sudah maksimal (+150). Gunakan dulu untuk menyerang! |
+### 8.7. Financial health (Profile)
+`ratio = totalSaving / (totalSaving + totalExpense)`: no data → *Belum ada data*; ≥ 0.70 → *Sehat 💚*; 0.40–0.69 → *Waspada 💛*; < 0.40 → *Boros ❤️*.
 
-### 7.7. Financial health status (Profile)
-```
-total = totalSaving + totalExpense
-ratio = totalSaving / total
-```
+### 8.8. Level display
+`level = 1 + exp ~/ expPerLevel`; Profile shows *"{exp % 100} / 100 EXP menuju level berikutnya"*.
 
-| Condition | Label (UI) |
-|---|---|
-| no transactions (`total == 0`) | Belum ada data |
-| ratio ≥ 0.70 | Sehat 💚 |
-| 0.40 ≤ ratio < 0.70 | Waspada 💛 |
-| ratio < 0.40 | Boros ❤️ |
-
-Totals come from SQL aggregates (all-time), not from the 100-item list.
-
-### 7.8. Level and EXP display
-`level = 1 + exp ~/ expPerLevel`. The Profile shows *"{exp % 100} / 100 EXP menuju level berikutnya"*.
-
-### 7.9. Pure functions in `game_rules.dart` (single source of game math)
-
+### 8.9. Pure functions in `game_rules.dart`
 ```dart
-class GameRules {
-  // ... constants above ...
-
-  /// Only the newly exceeded part of today's budget for this expense.
-  static int newOverage(int limit, int spentBefore, int amount) {
-    final overBefore = (spentBefore - limit) > 0 ? spentBefore - limit : 0;
-    final overAfter = (spentBefore + amount - limit) > 0 ? spentBefore + amount - limit : 0;
-    return overAfter - overBefore;
-  }
-
-  /// Hero HP lost for a given new overage (0 if none).
-  static int hpLoss(int newOverage) =>
-      newOverage <= 0 ? 0 : (newOverage ~/ rupiahPerHpLoss < 1 ? 1 : newOverage ~/ rupiahPerHpLoss);
-
-  /// Monster HP healed for a given new overage (0 if none).
-  static int monsterHeal(int newOverage) =>
-      newOverage <= 0 ? 0 : (newOverage ~/ rupiahPerHeal < 1 ? 1 : newOverage ~/ rupiahPerHeal);
-
-  /// Hero HP restored by a saving (before clamping to maxHp).
-  static int heroHpRestore(int amount) =>
-      (amount ~/ rupiahPerHpHeal) < 1 ? 1 : amount ~/ rupiahPerHpHeal;
+static int newOverage(int limit, int spentBefore, int amount) {
+  final overBefore = (spentBefore - limit) > 0 ? spentBefore - limit : 0;
+  final overAfter = (spentBefore + amount - limit) > 0 ? spentBefore + amount - limit : 0;
+  return overAfter - overBefore;
 }
+static int hpLoss(int newOverage) =>
+    newOverage <= 0 ? 0 : (newOverage ~/ rupiahPerHpLoss < 1 ? 1 : newOverage ~/ rupiahPerHpLoss);
+static int monsterHeal(int newOverage) =>
+    newOverage <= 0 ? 0 : (newOverage ~/ rupiahPerHeal < 1 ? 1 : newOverage ~/ rupiahPerHeal);
+static int heroHpRestore(int amount) =>
+    (amount ~/ rupiahPerHpHeal) < 1 ? 1 : amount ~/ rupiahPerHpHeal;
 ```
 
 ---
 
-## 8. Screen Specifications & Functional Requirements
+## 9. Screen Specifications
 
-### 8.1. Entry Point & Theme
-* `main.dart`: as in §5.3 step 1. `MaterialApp(title: 'FinQuest', theme: AppTheme.light, debugShowCheckedModeBanner: false, home: MainNavigationScreen())`.
-* `AppTheme.light`: `ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary))`.
-* `AppColors`: static `Color` constants only.
+### 9.1. Entry, Theme & Navigation
+* `main.dart`: `WidgetsFlutterBinding.ensureInitialized()` → `await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform)` → `await initializeDateFormatting('id_ID')` → `await NotificationService.instance.init()` → `runApp(MaterialApp(title: 'FinQuest', theme: AppTheme.light, darkTheme: AppTheme.dark, themeMode: ThemeMode.system, debugShowCheckedModeBanner: false, home: const AuthGate()))`. No network calls at startup.
+* `AppTheme`:
+  * `AppTheme.light`: `ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary, brightness: Brightness.light))`
+  * `AppTheme.dark`: `ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary, brightness: Brightness.dark))`
+  * **All colors, fonts, and buttons come from `Theme.of(context)`** (consistency & dark-mode checklist); `AppColors` holds only seed and semantic `Color` constants.
+* `MainNavigationScreen`: watches `GameStore` for initial `isLoadingState` / `hasLoadError` (§5.6). When loaded, shows a Material 3 `NavigationBar` (not `BottomNavigationBar`) with `IndexedStack(index: _currentIndex, children: const [ArenaScreen(), HistoryScreen(), QuestScreen(), ProfileScreen()])`:
 
-### 8.2. Formatters (`lib/core/utils/formatters.dart`)
-```dart
-String formatRupiah(num value);        // NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0)
-String formatDate(String isoString);   // DateTime.tryParse -> .toLocal() -> DateFormat('d MMM yyyy, HH:mm', 'id_ID'); fallback '-'
-String formatDateTime(DateTime date);  // same pattern, for transaction history
-String dateKey(DateTime date);         // DateFormat('yyyy-MM-dd').format(date) (local date)
-String todayKey();                     // dateKey(DateTime.now())
-```
-All Rupiah figures MUST go through `formatRupiah` (e.g. `Rp 10.000`, never `10000.0`).
-
-### 8.3. Root Navigation (`main_navigation_screen.dart`)
-* Material 3 `NavigationBar` (NOT `BottomNavigationBar`).
-
-| Index | Label | Icon (fixed) |
+| Index | Label | Icon |
 |---|---|---|
 | 0 | Arena | `Icons.shield` |
-| 1 | Quest | `Icons.newspaper` |
-| 2 | Profil | `Icons.person` |
+| 1 | Riwayat | `Icons.receipt_long` |
+| 2 | Quest | `Icons.newspaper` |
+| 3 | Profil | `Icons.person` |
 
-* Body: loading/error states (§5.3), then `IndexedStack(index: _currentIndex, children: [ArenaScreen, QuestScreen, ProfileScreen])` to preserve state across tabs. The Quest future is fetched once per session unless the user taps retry.
-* Owns all shared state, callbacks (§6.4), and the daily rollover (§6.5).
+* Detail/Edit screens are pushed with `Navigator.push(MaterialPageRoute)`; the back button/arrow always works. (`go_router` is optional and not used; adding it requires a PRD change.)
 
-### 8.4. Battle Arena (`arena_screen.dart`)
-* Body wrapped in `SingleChildScrollView` with padding.
-* Layout (top to bottom): `HeroStatus`, `MonsterDisplay`, end-state card (only if `isAdventureComplete`), `AttackForm`.
-* **`HeroStatus`:** hero name, *"Level {level}"*, *"HP Hero: {hp} / {maxHp}"* with `HpBar`, and a buff chip *"Buff Serangan: +{attackBuff}"* (only if > 0). Use a distinct bar color from the monster's if desired (still via `HpBar`).
-* **`MonsterDisplay`:** `Image.asset(..., height: 180, errorBuilder: ...)` with an icon placeholder on error; name as title; `Text('HP: ${monster.currentHp} / ${monster.maxHp}')`; `HpBar`.
-* **`HpBar`:** `TweenAnimationBuilder<double>` (400 ms) feeding a `LinearProgressIndicator(value:, minHeight: 14)` with rounded corners; green > 50 %, orange 25–50 %, red < 25 %.
-* **`AttackForm`:**
-  * Amount `TextField`: `keyboardType: TextInputType.number`, `inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(9)]`, `InputDecoration(border: OutlineInputBorder(), prefixIcon: Icon(Icons.monetization_on), labelText: 'Nominal Transaksi')`.
-  * **Category selector** (label *"Kategori Pengeluaran"*): Material 3 `DropdownMenu<ExpenseCategory>` or `DropdownButtonFormField`, options = all five categories with `label`, default `ExpenseCategory.food`. Used only by "Catat Pengeluaran".
-  * **Live budget hint** under the selector: *"Terpakai hari ini: {formatRupiah(spent)} / {formatRupiah(limit)}"*. If the typed amount would exceed the limit, show a red warning *"Melebihi batas! Perkiraan HP −{hpLoss}"* computed with `GameRules.newOverage`/`hpLoss`.
-  * Description `TextField` (label *"Deskripsi (opsional)"*; fallback *"Tabungan"* / *"Pengeluaran"* when empty).
-  * Buttons **"Catat Tabungan"** (`FilledButton`) and **"Catat Pengeluaran"** (`OutlinedButton`), disabled while `_isSubmitting`.
-  * Validation: empty or `<= 0` → inline `errorText` *"Masukkan nominal lebih dari 0"*; callbacks not called.
-  * On success: clear amount/description (keep the selected category), `FocusScope.of(context).unfocus()`. Dispose controllers in `dispose()`.
-* **Flow after saving:** `await onSaving` → if `null`, stop → SnackBar (§7.2) → if `defeatedMonsterName != null`, show the victory dialog.
-* **Flow after expense:** `await onExpense` → if `null`, stop → SnackBar (§7.3) → if `hpDepleted`, show the HP-depleted dialog (§7.4).
-* The Arena works fully offline.
+### 9.2. Formatters (`formatters.dart`)
+```dart
+String formatRupiah(num value);        // NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0)
+String formatDate(String isoString);   // tryParse -> toLocal -> DateFormat('d MMM yyyy, HH:mm', 'id_ID'); fallback '-'
+String formatDateTime(DateTime date);
+String dateKey(DateTime date);         // 'yyyy-MM-dd' (local)
+String todayKey();
+```
+All money goes through `formatRupiah` (e.g. `Rp 10.000`).
 
-### 8.5. Quest & News Screen (`quest_screen.dart`): the only online screen
-* `StatefulWidget` holding `late Future<List<Article>> _articlesFuture;` assigned in `initState()` (and re-assigned on retry/refresh). **Never call the service in `build()`** (NewsAPI free quota is 100 requests/day).
-* **Mission header (works offline, built from props):** *"Misi Harian: {claimsToday}/3 artikel"*, a progress indicator, and current buff *"Buff Serangan: +{attackBuff}"*. Note: *"Baca berita keuangan untuk mendapat Buff Serangan. Arena dan Profil tetap bisa dipakai tanpa internet."*
-* `FutureBuilder<List<Article>>`:
-  * `waiting` → centered `CircularProgressIndicator()`.
-  * `hasError` → centered icon, Indonesian message (§9.3), and **"Coba Lagi"** button (`setState(() => _articlesFuture = NewsService().fetchFinancialNews())`).
-  * Empty list → *"Belum ada berita saat ini."* + retry.
-  * Data → `ListView.builder` of `NewsCard`, optionally inside `RefreshIndicator`.
-* **`NewsCard`:** Material `Card`; thumbnail via `Image.network` only if `urlToImage != null` (with `errorBuilder`/`loadingBuilder` fallbacks); title (max 3 lines); source; date via `formatDate`; *"Sudah diklaim"* badge and dimmed style if `isClaimed`.
-* **Tap handling:** tap → `showModalBottomSheet` with `ArticleReaderSheet`. On **"Klaim Buff"**: close the sheet, `await onArticleRead(article)`, hide any current SnackBar, then show the message for the returned `ArticleClaimResult` (§7.6).
-* **`ArticleReaderSheet`:** scrollable content (title, source, date, description, `SelectableText(article.url)` so the link can be copied). If `isClaimed`, the button is disabled with label *"Sudah Diklaim"*. Otherwise the countdown (`Timer.periodic`, cancelled in `dispose()`) runs from `readSeconds` to 0, then the button is enabled.
-* Articles are not opened in an external browser (no `url_launcher`; locked dependencies). See §13.
-
-### 8.6. Profile & Summary Screen (`profile_screen.dart`)
-* Body: `SingleChildScrollView` containing a `Column`.
-* **Hero Stats (Card):** name, Level, **HP (`{hp} / {maxHp}` with `HpBar`)**, Total Gold, EXP total plus *"{exp % 100} / 100 EXP menuju level berikutnya"*, Active Buff *"+{attackBuff}"*.
-* **Daily Budget (Card), title *"Anggaran Harian"*:** one row per category: label, *"{formatRupiah(spent)} / {formatRupiah(limit)}"*, and a `LinearProgressIndicator` (`value` clamped to 0–1; green below 80 %, orange 80–100 %, red when spent > limit). A button **"Atur Batas Harian"** opens `BudgetSettingsSheet` via `showModalBottomSheet(isScrollControlled: true)`.
-* **`BudgetSettingsSheet`:** wrapped in `SingleChildScrollView`, bottom padding `viewInsets.bottom`. Five numeric `TextField`s (prefix *"Rp "*, `digitsOnly`, max 9 digits, initial value = current limit), one per category. Validation: empty or `< GameRules.minDailyLimit` → *"Minimal Rp 1.000"*. A **"Simpan"** button calls `onSave` with all five values (disabled while saving); on `true` close the sheet and show SnackBar *"Batas harian diperbarui. Berlaku untuk pengeluaran berikutnya."*; on `false` stay open. Dispose controllers in `dispose()`.
-* **Financial Summary (Card):** Total Tabungan, Total Pengeluaran (`formatRupiah`), and the Financial Health label (§7.7).
-* **Transaction History:** read-only, newest first, titled *"Riwayat Transaksi (100 terakhir)"*. Build with `Column(children: recentTransactions.map(...).toList())` or `ListView(shrinkWrap: true, physics: NeverScrollableScrollPhysics())`. Item: icon (saving = green up-arrow, expense = red down-arrow), description, **category label for expenses**, `formatDateTime`, signed amount (`+Rp 10.000` / `-Rp 10.000`).
-* Empty state: *"Belum ada transaksi. Mulai catat di Arena!"*.
+### 9.3. Battle Arena (`arena_screen.dart`)
+* Watches `GameStore`. Body: `SingleChildScrollView` inside `ResponsiveBody`. Order: optional chip *"Menunggu sinkronisasi"* (when `store.hasPendingWrites`), `HeroStatus(character: store.character)`, `MonsterDisplay(monster: store.currentMonster)`, end-state card (if `store.isAdventureComplete`), `const AttackForm()`.
+* **`HeroStatus`:** name, *"Level {level}"*, *"HP Hero: {hp} / {maxHp}"* with `HpBar`, buff chip *"Buff Serangan: +{attackBuff}"* (if > 0).
+* **`MonsterDisplay`:** `Image.asset(..., height: 180, semanticLabel: monster.name, errorBuilder: placeholder icon)`; name; `Text('HP: ${currentHp} / ${maxHp}')`; `HpBar`.
+* **`HpBar`:** `TweenAnimationBuilder<double>` (400 ms) → `LinearProgressIndicator(minHeight: 14)` with rounded corners; green > 50 %, orange 25–50 %, red < 25 %.
+* **`AttackForm`:** watches `budgets` and `todaySpent` from `GameStore`; amount `TextField` (`TextInputType.number`, `digitsOnly`, max 9 digits, `OutlineInputBorder`, `prefixIcon: Icon(Icons.monetization_on)`, label *"Nominal Transaksi"*); category `DropdownMenu<ExpenseCategory>` (label *"Kategori Pengeluaran"*, default `food`); live hint *"Terpakai hari ini: {Rp spent} / {Rp limit}"* and red warning *"Melebihi batas! Perkiraan HP −{n}"* (via `GameRules`); description `TextField` (≤ 100 chars, label *"Deskripsi (opsional)"*, fallback *"Tabungan"*/*"Pengeluaran"*); buttons **"Catat Tabungan"** (`FilledButton`) and **"Catat Pengeluaran"** (`OutlinedButton`), disabled while `_isSubmitting`; validation via `validateAmount` (inline error). After success: clear amount/description (keep category), unfocus keyboard; dispose controllers.
+* **After saving:** `final res = await context.read<GameStore>().recordSaving(...)` → SnackBar (§8.2) → victory dialog if `res?.defeatedMonsterName != null`. **After expense:** `final res = await context.read<GameStore>().recordExpense(...)` → SnackBar (§8.3) → HP-depleted dialog if `res?.hpDepleted == true`.
 * Works fully offline.
+
+### 9.4. Quest & News (`quest_screen.dart`): the only list that needs internet
+* `StatefulWidget` with `late Future<List<Article>> _articlesFuture;` set in `initState()` and re-assigned on retry/refresh. **Never call `NewsService` in `build()`.**
+* Watches `GameStore` for `character`, `claimedArticleUrls`, and `claimsToday`.
+* Header (offline-safe): *"Misi Harian: {claimsToday}/3 artikel"*, progress indicator, buff chip, note *"Arena, Riwayat, dan Profil tetap bisa dipakai tanpa internet."*
+* `FutureBuilder<List<Article>>`: waiting → `CircularProgressIndicator`; error → icon + Indonesian message (§10.3) + **"Coba Lagi"**; empty → *"Belum ada berita saat ini."* + retry; data → `ListView.builder` of `NewsCard` (optional `RefreshIndicator`).
+* `NewsCard`: Material `Card`; thumbnail via **`CachedNetworkImage`** only if `urlToImage != null` (placeholder + error widget, `memCacheHeight: 180`); title (max 3 lines); source; `formatDate`; *"Sudah diklaim"* badge + dimmed style if claimed.
+* Tap → `showModalBottomSheet(isScrollControlled: true)` with `ArticleReaderSheet` (title, source, date, description, `SelectableText(url)`; countdown via `Timer.periodic`, cancelled in `dispose()`; disabled with *"Sudah Diklaim"* if claimed). On **"Klaim Buff"**: close the sheet, `final result = await context.read<GameStore>().claimArticle(article)`, hide the current SnackBar, show the message for `result` (§8.6).
+* Articles are not opened in a browser (no `url_launcher`).
+
+### 9.5. History / List (`history_screen.dart`)
+* Watches `GameStore` (`recentTransactions`, `isLoadingTransactions`).
+* Title *"Riwayat Transaksi (100 terakhir)"*; `ListView.builder` inside `ResponsiveBody`, newest first. Item: icon (saving = green up-arrow, expense = red down-arrow), description, category label (expense), `formatDateTime`, signed amount (`+Rp` / `-Rp`).
+* **States:** loading → `CircularProgressIndicator`; empty → *"Belum ada transaksi. Mulai catat di Arena!"*.
+* Tap → `final result = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => TransactionDetailScreen(record: record)))`. On return `'deleted'` → SnackBar *"Transaksi dihapus"* with action **"Urungkan"** → `context.read<GameStore>().restoreTransaction(record)`; on `'edited'` → SnackBar *"Transaksi diperbarui"*.
+
+### 9.6. Transaction Detail (`transaction_detail_screen.dart`)
+* Receives `record` via constructor and shows the latest version of `record.id` taken from `context.select((GameStore s) => s.recentTransactions)`, using `indexWhere` or `firstWhere(..., orElse: () => widget.record)`. After a delete the record disappears from the list: the screen must fall back to the constructor record and **never throw** while it pops (keep a local `_isDeleting` flag to avoid stale UI).
+* Shows description, amount (`formatRupiah`), type, category, full date/time. Buttons **"Ubah"** (`FilledButton`) and **"Hapus"** (`OutlinedButton`, error color).
+* **Ubah** → push `TransactionEditScreen(record: currentRecord)`; on `true` pop with `'edited'`.
+* **Hapus** → confirmation `AlertDialog` *"Hapus transaksi ini? Efek pertarungan yang sudah terjadi (HP, monster, Gold) tidak dibatalkan."* with *"Batal"* / *"Hapus"* → `await context.read<GameStore>().deleteTransaction(currentRecord)` → pop with `'deleted'`.
+
+### 9.7. Transaction Edit (`transaction_edit_screen.dart`)
+* `Form` in `SingleChildScrollView` + `ResponsiveBody`. Fields: amount (prefilled, `digitsOnly`, `validateAmount`), description (≤ 100), category dropdown (**only for expenses**). Type and date are read-only text.
+* Notice text: *"Perubahan hanya memperbarui catatan dan total. Efek pertarungan tidak dihitung ulang."*
+* **"Simpan"** disabled while submitting; calls `await context.read<GameStore>().updateTransaction(widget.record, amount, desc, category)`; on `true` pop with `true`. Validation errors inline.
+
+### 9.8. Profile (`profile_screen.dart`)
+* Watches `GameStore`. `SingleChildScrollView` + `Column` inside `ResponsiveBody`.
+* **Hero Stats (Card):** name, email, Level, HP (`HpBar`), Gold, EXP progress text, Active Buff.
+* **Anggaran Harian (Card):** per category *"{Rp spent} / {Rp limit}"* + `LinearProgressIndicator` (clamped; green < 80 %, orange 80–100 %, red > 100 %); button **"Atur Batas Harian"** → `BudgetSettingsSheet(initialBudgets: store.budgets)`.
+* **`BudgetSettingsSheet`:** `showModalBottomSheet(isScrollControlled: true)`, `SingleChildScrollView`, padding `viewInsets.bottom`; five numeric fields (prefix *"Rp "*, `digitsOnly`, max 9 digits); each must be ≥ `minDailyLimit` (*"Minimal Rp 1.000"*); **"Simpan"** → `context.read<GameStore>().updateBudgets(newBudgets)`; success SnackBar *"Batas harian diperbarui. Berlaku untuk pengeluaran berikutnya."*
+* **Pengingat Harian:** `SwitchListTile` *"Pengingat Harian (20.00 WIB)"*. On toggle → `final ok = await context.read<GameStore>().toggleReminder(value)`; if `!ok` (denied) show *"Izin notifikasi ditolak. Aktifkan lewat Pengaturan aplikasi jika ingin pengingat."*
+* **Ringkasan Keuangan (Card):** Total Tabungan, Total Pengeluaran, health label (§8.7).
+* **"Keluar"** button → confirmation dialog → `await context.read<GameStore>().logout()`.
+
+### 9.9. Responsive Layout (phone + tablet)
+Every screen body uses `ResponsiveBody` (center, max width 600). Verify on a small phone (360×640), a large phone, and a 10" tablet emulator, in portrait and landscape. (Optional P2: `NavigationRail` instead of `NavigationBar` when width ≥ 840.)
+
+### 9.10. Required UI states (P13 checklist)
+| Screen | Loading | Error | Empty |
+|---|---|---|---|
+| Initial load | spinner + text | message + Coba Lagi | n/a (defaults created) |
+| Login/Register | button spinner | SnackBar/inline message | n/a |
+| Riwayat | spinner | write errors via SnackBar | *Belum ada transaksi…* |
+| Quest | spinner | message + Coba Lagi | *Belum ada berita…* |
+
+### 9.11. Form validation (P13 checklist)
+Login, Register, Arena amount, Edit transaction, and Budget settings all show clear inline Indonesian messages for each required field (§6.4).
 
 ---
 
-## 9. Network Service Specification (Quest only)
+## 10. Network Service (NewsAPI, Quest only)
 
-### 9.1. `lib/core/constants/api_endpoints.dart`
+### 10.1. `lib/core/constants/api_endpoints.dart`
 ```dart
 class ApiEndpoints {
   static const String apiKey = String.fromEnvironment('NEWS_API_KEY');
+  static const String baseUrl =
+      String.fromEnvironment('NEWS_API_URL', defaultValue: 'https://newsapi.org');
   static const String financialNewsUrl =
-      'https://newsapi.org/v2/top-headlines?category=business&country=us&apiKey=$apiKey';
+      '$baseUrl/v2/top-headlines?category=business&country=us&apiKey=$apiKey';
 }
 ```
-* `country=us` is a deliberate choice (the free tier returns little or nothing for `country=id`). Consequence: article text is in English while the UI is Indonesian.
-* If `apiKey` is empty, the service throws a `NewsException` without calling the network.
+* HTTPS only. `country=us` is deliberate (the free tier returns little or nothing for `country=id`); article text is English while the UI is Indonesian.
+* If `apiKey` is empty, the service throws without calling the network.
 
-### 9.2. `lib/services/news_service.dart`
+### 10.2. `lib/services/news_service.dart`
 ```dart
 import 'dart:async';
 import 'dart:convert';
@@ -949,7 +1103,6 @@ class NewsService {
       final response = await http
           .get(Uri.parse(ApiEndpoints.financialNewsUrl))
           .timeout(const Duration(seconds: 10));
-
       switch (response.statusCode) {
         case 200:
           final Map<String, dynamic> data = jsonDecode(response.body);
@@ -976,80 +1129,109 @@ class NewsService {
 }
 ```
 
-### 9.3. Error → UI message mapping
-
-| Situation | Message (Indonesian) |
-|---|---|
-| API key missing | API key belum diatur… |
-| HTTP 401 | API key tidak valid… |
-| HTTP 429 | Kuota NewsAPI hari ini habis… |
-| Other non-200 | Gagal memuat berita (kode X)… |
-| `SocketException` | Tidak ada koneksi internet… |
-| `TimeoutException` | Koneksi terlalu lama… |
-| `FormatException` | Data berita tidak dapat dibaca… |
-| Any other exception | Terjadi kesalahan. Coba lagi. |
-
-`QuestScreen` shows `error is NewsException ? error.message : 'Terjadi kesalahan. Coba lagi.'`.
+### 10.3. Error → UI message
+Missing key, 401, 429, other non-200, `SocketException`, `TimeoutException`, `FormatException` map to the messages above; anything else → *"Terjadi kesalahan. Coba lagi."* (`QuestScreen` shows `error is NewsException ? error.message : 'Terjadi kesalahan. Coba lagi.'`).
 
 ---
 
-## 10. Project Setup & Developer Onboarding
+## 11. Notifications & Runtime Permission
 
-### 10.1. Clone & Navigate
-```bash
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+### 11.1. Feature: Daily Reminder (local notification)
+* Title *"Pengingat FinQuest"*, body *"Sudah catat pengeluaran hari ini? Monster Boros menunggumu!"*, channel id `finquest_reminder`, channel name *"Pengingat Harian"*.
+* Scheduled every day at **20:00 WIB** (`Asia/Jakarta`) with `zonedSchedule`, `matchDateTimeComponents: DateTimeComponents.time`, and **inexact** scheduling (`AndroidScheduleMode.inexactAllowWhileIdle`): exact alarms are restricted on recent Android and not needed here. Time zone is fixed to WIB (`tz.initializeTimeZones(); tz.setLocalLocation(tz.getLocation('Asia/Jakarta'))`); this is a documented limitation.
+* Follow the `flutter_local_notifications` README for the installed version (the lecturer's slides use the named-parameter API, e.g. `initialize(settings: ...)`, `show(id: ..., ...)`).
+
+### 11.2. `lib/services/notification_service.dart`
+```dart
+class NotificationService {
+  static final NotificationService instance = NotificationService._();
+  NotificationService._();
+
+  Future<void> init();                     // plugin init + timezone setup (called in main)
+  Future<bool> requestPermission();        // Android 13+: POST_NOTIFICATIONS via the plugin; true if granted or not needed
+  Future<void> scheduleDailyReminder();    // fixed id (e.g. 1), idempotent
+  Future<void> cancelDailyReminder();
+  Future<void> cancelAll();
+}
 ```
 
-### 10.2. Generate Platform Folders (only if `android/` and `ios/` are missing)
-```bash
-flutter create . --project-name finquest --platforms=android,ios
-```
-This must NOT overwrite `lib/main.dart` or `pubspec.yaml` content; restore them from Git if replaced.
+### 11.3. Permission flow (P14 rules)
+1. Permission is requested **only when the user turns the reminder switch ON** (not at app start).
+2. Before calling `toggleReminder(true)`, `ProfileScreen` shows a short explanation dialog: *"FinQuest ingin mengirim pengingat harian agar kamu tidak lupa mencatat pengeluaran."* with *"Nanti"* / *"Lanjut"*.
+3. Inside `GameStore.toggleReminder(true)`: calls `_notifications.requestPermission()`. If granted → `scheduleDailyReminder()`, `_reminderEnabled = true`, `notifyListeners()`, `_save()`, returns `true`.
+4. Denied → switch stays OFF (`_reminderEnabled = false`), returns `false`, and `ProfileScreen` shows the denial message (§9.8). **The app remains fully functional.**
+5. On each app load with `_reminderEnabled == true`, `GameStore` re-ensures the schedule (idempotent); if permission was revoked meanwhile, set `_reminderEnabled = false`.
 
-### 10.3. Scaffold Missing Directories (if starting clean)
-* **macOS / Linux / Git Bash:**
+### 11.4. Android manifest
+Permissions are minimal: `INTERNET`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` (reschedule after reboot). Add the plugin's receivers and enable core library desugaring exactly as its README states (§12.6). Remove any permission not listed here.
+
+---
+
+## 12. Setup, Release & Distribution
+
+### 12.1. Prerequisites
+Flutter SDK, Android Studio/SDK, Firebase CLI (`npm i -g firebase-tools` or the standalone installer), FlutterFire CLI (`dart pub global activate flutterfire_cli`), a Google account added to the team's Firebase project.
+
+### 12.2. Create the project (first teammate only; others clone)
+```bash
+flutter create . --org id.ac.telkomuniversity --project-name finquest --platforms=android,ios
+```
+This gives the applicationId `id.ac.telkomuniversity.finquest`. **The applicationId is permanent once published and must match the Android app registered in Firebase**; decide it now. Do not let `flutter create` overwrite `lib/main.dart` or `pubspec.yaml` contents (restore from Git if needed).
+
+### 12.3. Scaffold directories (if starting clean)
+* macOS/Linux/Git Bash:
   ```bash
-  mkdir -p assets/images lib/core/constants lib/core/theme lib/core/utils lib/models lib/services lib/screens/arena/widgets lib/screens/quest/widgets lib/screens/profile/widgets lib/widgets
+  mkdir -p assets/images lib/core/constants lib/core/theme lib/core/utils lib/models lib/services lib/state lib/screens/auth lib/screens/arena/widgets lib/screens/history lib/screens/quest/widgets lib/screens/profile/widgets lib/widgets
   ```
-* **Windows PowerShell:**
+* Windows PowerShell:
   ```powershell
-  New-Item -ItemType Directory -Force -Path assets/images, lib/core/constants, lib/core/theme, lib/core/utils, lib/models, lib/services, lib/screens/arena/widgets, lib/screens/quest/widgets, lib/screens/profile/widgets, lib/widgets
+  New-Item -ItemType Directory -Force -Path assets/images, lib/core/constants, lib/core/theme, lib/core/utils, lib/models, lib/services, lib/state, lib/screens/auth, lib/screens/arena/widgets, lib/screens/history, lib/screens/quest/widgets, lib/screens/profile/widgets, lib/widgets
   ```
+Commit the three monster PNGs (empty folders are not tracked by Git).
 
-### 10.4. Assets
-Commit the three monster PNGs (empty folders are not tracked by Git and a missing asset folder breaks the build). Recommended: ≤ 512×512 px, transparent background.
-
-### 10.5. Android INTERNET Permission (required for release builds)
-In `android/app/src/main/AndroidManifest.xml`, inside `<manifest>` and outside `<application>`:
-```xml
-<uses-permission android:name="android.permission.INTERNET"/>
-```
-iOS needs no extra configuration. `sqflite` needs no permissions.
-
-### 10.6. Install Dependencies
+### 12.4. Connect Firebase & Install Packages
 ```bash
+firebase login
+flutterfire configure        # pick the team project and the Android (and iOS) app
+flutter pub add provider firebase_core firebase_auth cloud_firestore flutter_local_notifications timezone cached_network_image
 flutter pub get
 ```
+Publish `firestore.rules` in the console (Firestore → Rules) and keep the same text in the repo.
 
-### 10.7. Configure API Key (never commit it)
+### 12.5. Run
 ```bash
-flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
-```
-VS Code: put `"args": ["--dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY"]` in a **local, uncommitted** `launch.json` (add `.vscode/` to `.gitignore`). Android Studio: *Run → Edit Configurations → Additional run args*. Release build: `flutter build apk --dart-define=NEWS_API_KEY=...`.
-
-### 10.8. Verify & Run
-```bash
-flutter doctor
-flutter devices
 flutter analyze
 flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
 ```
+VS Code: put `"args": ["--dart-define=NEWS_API_KEY=..."]` in a **local, uncommitted** `launch.json` (add `.vscode/` to `.gitignore`). Android Studio: *Run → Edit Configurations → Additional run args*. Emulator note: a local dev server would be `http://10.0.2.2:PORT`, but this project uses only HTTPS services.
 
-### 10.9. Reset Local Data (REQUIRED once after pulling schema changes)
-The schema changed (v4.0) while the DB version is still 1, so an older `finquest.db` will crash on missing columns/tables. Uninstall the app from the device/emulator, or *Settings → Apps → FinQuest → Storage → Clear data*. Repeat whenever the schema in §5.1 changes before the first release.
+### 12.6. Android configuration checklist
+* `minSdk` as required by the Firebase plugins (check the plugin changelog; raise it in `android/app/build.gradle(.kts)` if the build complains).
+* Core library desugaring enabled and its dependency added, as `flutter_local_notifications` requires.
+* `AndroidManifest.xml`: only the permissions in §11.4, plus the notification receivers from the plugin README. `INTERNET` is mandatory for release builds.
+* Launcher icon and app label (*FinQuest*) set (identity checklist).
 
-### 10.10. Troubleshooting
+### 12.7. Release build (P15)
+1. **Upload key (once):** `keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload`. Store the file and passwords safely; **never commit them**.
+2. Create `android/key.properties` (gitignored) and configure signing in the app Gradle file as in docs.flutter.dev/deployment/android.
+3. Bump `version` in `pubspec.yaml` (`1.0.0+1`, increase the number after `+` for every upload).
+4. Build (obfuscated):
+   ```bash
+   flutter build appbundle --release --obfuscate --split-debug-info=build/symbols --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
+   flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
+   ```
+   Keep `build/symbols` for each released version (needed to read obfuscated crash traces).
+5. **Test the release build on a real device:** normal network, slow network, and airplane mode.
+
+### 12.8. Distribution (evidence required)
+* **Recommended for class assessment:** Firebase App Distribution (testers receive an invite link) and/or the signed APK/AAB file.
+* **Google Play:** a new personal developer account needs a closed test with ≥ 12 testers for 14 consecutive days before production access. Only plan this if the lecturer requires Play and recruiting starts early. Get written approval from the lecturer for any alternative.
+* If publishing to Play: complete **Data safety** (collected: email, display name, financial entries; stored in Firebase), add a **privacy policy** URL, and provide **in-app account deletion** (Play policy for apps with accounts; currently out of scope, see §16).
+
+### 12.9. README.md (P15)
+Must contain: how to run (with `--dart-define`), Firebase setup notes, folder structure, feature list, task division (§17), distribution link or APK/AAB location, and known limitations (§16).
+
+### 12.10. Troubleshooting
 ```bash
 flutter clean
 flutter pub get
@@ -1058,148 +1240,186 @@ flutter run --dart-define=NEWS_API_KEY=YOUR_ACTUAL_API_KEY
 
 ---
 
-## 11. AI Prompting Instructions for Teammates (Vibecoding Template)
+## 13. Security & Performance Checklist (P14)
 
-Paste into your AI coding assistant (Cursor, Copilot, ChatGPT, Claude, Gemini) and attach this PRD:
+| Item | Requirement in this project | Status target |
+|---|---|---|
+| HTTPS only | NewsAPI and Firebase over HTTPS; no cleartext traffic configured | ✅ |
+| No secrets in the app | Firebase client config is not secret. **NewsAPI key is embedded via `--dart-define` and is extractable from the APK**; mitigation options in §16 (documented exception) | ⚠️ documented |
+| Validation in backend | Firestore Security Rules: ownership + structure checks (§5.3) | ✅ |
+| Security Rules | Per-user read/write only; default deny; user doc cannot be deleted | ✅ |
+| Obfuscation | Release builds use `--obfuscate --split-debug-info` | ✅ |
+| Minimal permissions | Only `INTERNET`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` | ✅ |
+| Secure token storage | Firebase Auth SDK (Keystore/Keychain); no manual tokens, no `shared_preferences` | ✅ |
+| `const` widgets | Use `const` constructors wherever possible (`flutter analyze` lints) | ✅ |
+| Builders for lists | `ListView.builder` for Riwayat and Quest | ✅ |
+| Image cache & size | `CachedNetworkImage` with `memCacheHeight`; monster PNG ≤ 512 px | ✅ |
+| Rebuild scope | `context.select`/`Selector` instead of blanket `watch`; change-only `notifyListeners()`; copy-on-change publishing | ✅ |
+| Profile mode | Check jank with `flutter run --profile` + DevTools Performance (not in debug) | ✅ |
+| Security review (forum) | Report one fix made (e.g. rules tightened, permission removed, key handling) | task |
+
+---
+
+## 14. AI Prompting Instructions for Teammates (Vibecoding Template)
+
+Paste into your AI assistant (Cursor, Copilot, ChatGPT, Claude, Gemini) and attach this PRD:
 
 ```text
 Context & Rules:
-- Project: FinQuest (Flutter offline-first mobile app, college final project).
-- Strictly obey PRD.md v4.0: models (section 4), SQLite schema (5.1), constructor contracts (6.3), game rules (7).
-- FORBIDDEN: external state management (No Bloc, Riverpod, Provider, GetX). Use only StatefulWidget and setState().
-- Persistence: ONLY sqflite + path, ONLY inside lib/services/database_helper.dart. FORBIDDEN: Hive, Isar, Drift, SharedPreferences, Firebase, JSON files.
-- Only MainNavigationScreen calls DatabaseHelper. Child screens use constructor params and async callbacks exactly as in 6.3. Never mutate shared objects from child screens.
-- Write-through order: compute -> await DB (single transaction for multi-row changes) -> setState. On DB error: SnackBar "Gagal menyimpan data. Coba lagi." and leave state unchanged.
-- Game math (damage, overage, HP loss, heal, level-down) lives ONLY in lib/core/constants/game_rules.dart (static constants + pure functions). Never duplicate formulas in widgets.
-- Budget rule: only the NEWLY exceeded part of the daily limit is penalized (GameRules.newOverage). Within-limit expenses have no gameplay effect.
-- Offline-first: only QuestScreen/NewsService may use the network. Arena and Profile must work in airplane mode. Never await network at startup.
-- Allowed packages: flutter, http, intl, sqflite, path. SDK libraries (dart:io, dart:async, flutter/services.dart) are fine.
-- DO NOT rename or change model schemas, table/column names, constructor signatures, or folder structure.
-- All Rupiah text uses formatRupiah(). Dates use dateKey()/todayKey() for day keys.
-- Wrap any screen or bottom sheet containing a TextField in SingleChildScrollView (sheets: isScrollControlled + viewInsets padding). Never put a ListView inside a SingleChildScrollView without shrinkWrap + NeverScrollableScrollPhysics.
-- Never call NewsService inside build(); cache the Future in initState.
-- Never hardcode the API key; use String.fromEnvironment('NEWS_API_KEY').
-- Use parameterized SQL only. Use Material 3 (NavigationBar, FilledButton, ColorScheme.fromSeed).
-- Check mounted / context.mounted after every await before using context or calling setState.
-- Write code, comments, enum values, and DB identifiers in English, but keep ALL UI strings in Indonesian.
-- Modify ONLY this file: [INSERT_TARGET_FILE_PATH, e.g., lib/services/database_helper.dart]
+- Project: FinQuest (Flutter, Firebase Auth + Cloud Firestore, ChangeNotifier + provider, offline-first, college final project).
+- Strictly obey PRD.md v5.2: models (section 4), Firestore schema (5.2), GameStore & widget contracts (section 7), game rules (section 8).
+- STATE MANAGEMENT: Use `provider` with the single `GameStore extends ChangeNotifier` (`lib/state/game_store.dart`) as defined in PRD section 7. FORBIDDEN: Bloc, Riverpod, GetX, or creating extra ChangeNotifiers. In widgets, read state with `context.select<GameStore, T>(...)` (or `Selector`) inside `build()` and use `context.read<GameStore>()` inside button/form callbacks. Local UI state (TextEditingController, _isSubmitting, tab index, timers) stays in StatefulWidget + setState.
+- GAMESTORE RULES: inject `GameRepository`, `NotificationService`, `AuthService` through the constructor; guard `notifyListeners()` and async callbacks with `_disposed`; publish new copies of models/collections on change (never mutate published objects); call `notifyListeners()` only when data actually changed; create the default user document only when a `GameStateEvent` has `state == null && isFromCache == false`.
+- BOUNDARIES: Only `lib/services/*` may import `firebase_*`, `cloud_firestore`, `flutter_local_notifications`, `timezone`, or `http`. Auth screens may call `AuthService`. ONLY `GameStore` calls `GameRepository` and `NotificationService`. Child screens never touch Firebase or repositories directly.
+- NEVER await a Firestore write in the UI path (offline it never completes). Inside `GameStore`: compute -> mutate fields -> `notifyListeners()` -> `_save()` without await -> snapshot listener reconciles.
+- All game math lives in `lib/core/constants/game_rules.dart`. Only the newly exceeded part of a daily limit is penalized (`GameRules.newOverage`). Edit/delete of a transaction never recalculates battle effects.
+- Never store tokens manually; Firebase Auth handles the session.
+- Allowed packages: `flutter`, `provider`, `http`, `intl`, `firebase_core`, `firebase_auth`, `cloud_firestore`, `flutter_local_notifications`, `timezone`, `cached_network_image`. Do not hand-write versions of Firebase, `provider`, or notification packages; use `flutter pub add`.
+- DO NOT rename/change models, Firestore field names, `GameStore` members, constructor signatures, or folder structure.
+- Wrap every screen body in `ResponsiveBody`. Any screen/sheet with a `TextField` must be scrollable (sheets: `isScrollControlled` + `viewInsets` padding). No `ListView` inside `SingleChildScrollView` without `shrinkWrap` + `NeverScrollableScrollPhysics`.
+- Every screen needs loading, error, and empty states (PRD 9.10) and Indonesian validation messages (PRD 6.4).
+- Use `const` constructors, `ListView.builder`, `CachedNetworkImage`. Keep widgets under ~150 lines (split them).
+- Never call `NewsService` inside `build()`; cache the Future in `initState`. Never hardcode the API key (`String.fromEnvironment`).
+- Use Material 3 and `ThemeData` colors only (supports light & dark mode; no hardcoded colors in widgets). All Rupiah text uses `formatRupiah()`.
+- Check `mounted` / `context.mounted` after every `await`.
+- Write code, comments, enum values, Firestore field names in English; ALL UI strings in Indonesian.
+- Modify ONLY this file: [INSERT_TARGET_FILE_PATH, e.g., lib/state/game_store.dart]
 - If you need something from another file, assume it exists with the signature in the PRD; do not rewrite it.
 ```
 
 ---
 
-## 12. Acceptance Criteria (Definition of Done)
+## 15. Acceptance Criteria (Definition of Done)
 
-### 12.1. Build & Quality
-- [ ] `flutter run --dart-define=NEWS_API_KEY=...` builds and runs on at least one Android device/emulator (iOS if available).
-- [ ] `flutter analyze` reports **0 errors and 0 warnings**.
-- [ ] `pubspec.yaml` contains only `flutter`, `http`, `intl`, `sqflite`, `path` (plus dev dependencies).
-- [ ] `sqflite`/`path` are imported only in `database_helper.dart`; `http` only in `news_service.dart`.
-- [ ] No real API key and no `.db` file exist in the repository (`git grep`/`git ls-files` check).
-- [ ] No file exists outside the tree in §3 (except allowed exceptions).
-- [ ] Game formulas exist only in `game_rules.dart` (grep for `~/` in widgets/screens finds no game math).
+### 15.1. Build, Architecture & Quality
+- [ ] `flutter run --dart-define=NEWS_API_KEY=...` runs on an Android emulator **and** a real phone.
+- [ ] `flutter analyze` reports 0 errors and 0 warnings; `flutter test` passes (include at least unit tests for `GameRules` pure functions).
+- [ ] Layered architecture (P12): UI reads/calls `GameStore` via `provider` (`context.select`/`Selector` in `build`, `context.read` in callbacks); `GameStore` calls `GameRepository`/`NotificationService`; Firebase imports appear only in `lib/services/*`.
+- [ ] `GameStore` is constructed with injected `GameRepository`/`NotificationService`/`AuthService`; at least one `flutter test` exercises `recordSaving`, `recordExpense`, `updateTransaction`, and `deleteTransaction` using a fake repository (no Firebase).
+- [ ] Widgets use `context.select`/`Selector` for reactive reads; adding a transaction does not rebuild the Quest tab (check with DevTools rebuild counts).
+- [ ] `pubspec.yaml` contains only the allowed packages; no `sqflite`/`bloc`/`riverpod`/`shared_preferences`.
+- [ ] No NewsAPI key, keystore, `key.properties`, or passwords in the repository (`git grep`/`git ls-files`).
+- [ ] Game formulas exist only in `game_rules.dart`.
 
-### 12.2. Layout & Navigation
-- [ ] No overflow banner when the keyboard opens in Arena and in the budget settings sheet, on a small screen (360×640) and in landscape.
-- [ ] Switching tabs preserves state (Arena inputs/HP, Quest scroll position, Profile data).
-- [ ] Tab labels are not truncated on a 360 px-wide screen.
-- [ ] A loading indicator shows briefly at startup; a DB load failure shows the retry state instead of a crash.
+### 15.2. Authentication (F1)
+- [ ] Register creates an account; the user lands in Main; the hero name equals the entered name.
+- [ ] Login with wrong password/unknown email shows the correct Indonesian message; invalid email/short password blocked by validation.
+- [ ] Closing and reopening the app keeps the session (no login again), **also in airplane mode**.
+- [ ] Login/register without internet shows the no-internet message and does not crash.
+- [ ] Logout returns to Login, disposes `GameStore`, cancels the reminder, and another account sees only its own data.
+- [ ] Firestore rules: a second account cannot read the first account's documents (test in the Rules playground or with two accounts).
+- [ ] Right after registration, the Arena shows the name typed in *Nama Pahlawan* (not the email prefix) without restarting the app.
+- [ ] Logging out right after a write leaves no *"used after being disposed"* error in the logs.
 
-### 12.3. Battle & Hero HP
-- [ ] Saving Rp 10.000 with no buff deals exactly 10 damage and restores 2 hero HP (if below max); HP text and `HpBar` update with animation.
-- [ ] Saving Rp 500 deals 1 damage and restores 1 hero HP (minimums); Gold/EXP/Level follow §7.2.
-- [ ] Empty, `0`, or non-numeric amount is rejected with the inline error; letters cannot be typed.
-- [ ] Tapping a button twice quickly creates only **one** transaction.
-- [ ] Defeating monster 1 shows the victory dialog; the next monster appears at full HP; +50 Gold/+50 EXP are applied.
-- [ ] Defeating all three monsters shows the end-state card; the attack form is still visible; saving then deals no damage and does not consume the buff; "Mulai Petualangan Baru" resets monsters but keeps hero stats, history, budgets, and claims.
+### 15.3. Firebase data & offline (P14/P15)
+- [ ] First login creates the default user document (100/100 HP, default limits, 3 monsters at full HP).
+- [ ] Logging, battle, budget changes, and CRUD work in **airplane mode**; after reconnecting, the data appears in the Firestore console.
+- [ ] Force-closing and reopening restores everything (monster/hero HP, gold, EXP, level, buff, history, today's spending, limits, current monster).
+- [ ] Buttons never freeze while offline (no awaiting of write acknowledgements); the *Menunggu sinkronisasi* chip shows while writes are pending.
+- [ ] A write rejected by Security Rules (simulated) shows the error SnackBar and the UI reverts to server state.
+- [ ] Description `'; DROP TABLE x; --` is stored and shown literally.
+- [ ] An existing user document is never overwritten: a fresh install that starts offline with an empty cache does not create default data, and after reconnecting the real progress loads.
+- [ ] Default data is created only for an account whose server-confirmed document is missing.
 
-### 12.4. Budget Survival (NEW)
-- [ ] First launch shows default limits (Makan Rp 50.000, Transportasi Rp 20.000, Hiburan Rp 30.000, Belanja Rp 50.000, Lainnya Rp 30.000).
-- [ ] Makan Rp 30.000 → no HP change, no monster heal, SnackBar shows remaining Rp 20.000; the transaction is logged with category *Makan*.
-- [ ] Then Makan Rp 40.000 → hero −20 HP, monster +10 HP, warning SnackBar.
-- [ ] Then Makan Rp 10.000 → hero −10 HP (only the new overage is penalized, **not** 30).
-- [ ] Spending exactly the limit causes no penalty; Rp 1 over causes −1 HP.
-- [ ] Limits are per category: overspending Hiburan does not affect Makan's remaining budget.
-- [ ] The live hint in `AttackForm` shows spent/limit and the red "Melebihi batas! Perkiraan HP −N" warning matches the actual HP loss afterwards.
-- [ ] When hero HP reaches 0 at Level ≥ 2: dialog appears, level −1, EXP = floor of the new level (`(level-1)*100`), HP = full, gold unchanged.
-- [ ] At Level 1: HP reaches 0 → EXP reset to 0, level stays 1, HP = full, correct dialog text.
-- [ ] Only one demotion per depletion event (no chained level drops).
-- [ ] Editing limits in Profile (valid values) updates the bars immediately, persists after restart, and applies only to later expenses; a value below Rp 1.000 or empty shows the validation error and does not save.
-- [ ] After the device date moves to the next day: today's spending resets to 0 and hero HP regenerates +25 (capped at max); skipping 2 days gives +50.
-- [ ] Resuming the app from background after midnight refreshes the budget bars and regen without restarting.
-- [ ] Expense logging, budget penalties, and level-down all work with the adventure complete (no monster heal).
+### 15.4. Battle & Budget (F2, F3)
+- [ ] Saving Rp 10.000 with no buff deals 10 damage and restores 2 hero HP (if below max); saving Rp 500 deals 1 and restores 1.
+- [ ] Empty/0/non-numeric amount is rejected; letters cannot be typed; double-tapping a button creates only one transaction.
+- [ ] Defeating monster 1 shows the victory dialog, next monster at full HP, +50 Gold/+50 EXP; defeating all three shows the end card while the form stays usable.
+- [ ] Default limits appear on first launch; Makan Rp 30.000 → no penalty (SnackBar shows remaining Rp 20.000).
+- [ ] Then Makan Rp 40.000 → hero −20 HP, monster +10; then Rp 10.000 → hero −10 (only new overage).
+- [ ] Exactly the limit → no penalty; Rp 1 over → −1 HP; limits are per category.
+- [ ] Live hint and warning in `AttackForm` match the actual HP loss.
+- [ ] HP reaches 0 at Level ≥ 2 → dialog, level −1, EXP = `(level−1)*100`, HP full; at Level 1 → EXP reset to 0; one demotion per event.
+- [ ] Editing limits persists, updates bars immediately, applies only to later expenses; invalid values show *Minimal Rp 1.000*.
+- [ ] After the device date moves forward: today's spending resets and HP regenerates +25 per day (capped); resuming the app after midnight refreshes without restart.
 
-### 12.5. Persistence & Offline
-- [ ] After logging transactions, hurting a monster, changing a limit, and claiming a buff, **force-closing and reopening** the app restores everything exactly (monster HP, hero HP, gold, EXP, level, buff, history, today's spending, limits, current monster).
-- [ ] Killing the app **while a victory or HP-depleted dialog is open** leaves all consequences applied on relaunch.
-- [ ] In **airplane mode from a fresh launch**, Arena, budgets, and Profile work fully and persist; Quest shows the no-internet message with a working **"Coba Lagi"** after reconnecting.
-- [ ] A buff claimed online is usable offline and is consumed after a real attack, also after restart.
-- [ ] A simulated DB error (temporarily throwing in `persistTurn`) shows the error SnackBar and leaves UI state unchanged (no half-applied HP/level/transaction).
-- [ ] Profile totals match the sum of all records even with more than 100 transactions; only the latest 100 are listed.
-- [ ] Descriptions containing quotes or SQL characters (e.g. `'; DROP TABLE x; --`) are stored and displayed literally.
-- [ ] The database rejects an expense without category and a saving with a category (CHECK constraints).
+### 15.5. History & CRUD (F4)
+- [ ] Riwayat lists transactions newest first (max 100), with loading and empty states; tap opens Detail; back arrow works.
+- [ ] Edit changes amount/description/category (category only for expenses); the list, Profile totals, and today's budget bars update immediately via `GameStore`; battle state is unchanged.
+- [ ] Delete shows a confirmation; after confirming the item disappears, totals update, and **Urungkan** restores it with the same data.
+- [ ] Editing/deleting works offline and syncs later; invalid edit amount shows the inline error.
+- [ ] Deleting a transaction from its Detail screen does not throw while the screen closes; **Urungkan** restores it.
 
-### 12.6. Daily Mission & Network
-- [ ] Headlines load from NewsAPI and render via `ListView.builder`; "[Removed]" items are hidden.
-- [ ] Tapping an article opens the reader sheet; the claim button is disabled for 10 seconds with a countdown, then enabled.
-- [ ] A claim gives +50 buff and survives a restart; claiming the same article again shows the "sudah diklaim" message.
-- [ ] The 4th claim on the same day shows the daily-limit message; after the date changes the quota is available again (claimed URLs stay claimed).
-- [ ] Buff never exceeds +150.
-- [ ] Wrong API key shows the 401 message; no crash in any network error case.
-- [ ] Switching tabs back and forth does NOT trigger a new API request.
-- [ ] Articles without images render without errors.
+### 15.6. Daily Mission (F5)
+- [ ] Headlines load via `ListView.builder`; "[Removed]" items hidden; images use `CachedNetworkImage`; articles without image render fine.
+- [ ] Reader sheet's claim button is disabled for 10 s with a countdown; a claim gives +50, persists after restart, and works offline in battle (consumed after a real attack).
+- [ ] Same article twice → "sudah diklaim"; 4th claim on the same day → daily-limit message; next day quota is available again; buff never exceeds +150.
+- [ ] No internet → no-internet message + working **Coba Lagi**; wrong key → 401 message; switching tabs does not refetch.
 
-### 12.7. Profile & Formatting
-- [ ] Every money value displays like `Rp 10.000`.
-- [ ] Dates display in Indonesian (e.g. `14 Okt 2026, 09:30`) with no `LocaleDataException`.
-- [ ] Transaction history is newest first, shows category for expenses, shows the empty state initially, and causes no "unbounded height" error.
-- [ ] Financial health label matches §7.7 for all three thresholds and the empty state.
-- [ ] Budget progress bars are green/orange/red at <80 % / 80–100 % / >100 % of the limit.
+### 15.7. Notifications & Permission
+- [ ] Turning the reminder ON shows the explanation dialog, then the system permission dialog (Android 13+); granted → scheduled; the notification appears at the scheduled time (test by temporarily setting a near time).
+- [ ] Denying the permission keeps the switch OFF with the message; the rest of the app works normally.
+- [ ] Turning OFF cancels the notification; the reminder is rescheduled after a device reboot.
 
----
+### 15.8. Layout, Theme & Performance
+- [ ] No overflow when the keyboard opens (Login, Register, Arena, Edit, Budget sheet) on 360×640 and landscape.
+- [ ] Screens look correct on a phone and a tablet emulator (content centered, max width 600).
+- [ ] All colors/fonts/buttons come from `ThemeData` (both light and dark themes work cleanly); tab switching preserves state; tab labels are not truncated.
+- [ ] Profile-mode run (`flutter run --profile`) shows no obvious jank in Arena and lists (DevTools check noted in the report).
 
-## 13. Risks, Known Limitations & Open Decisions
+### 15.9. Formatting
+- [ ] Every money value shows like `Rp 10.000`; dates show Indonesian format with no `LocaleDataException`.
+- [ ] Financial health label matches §8.7 for all three thresholds and the empty state.
 
-**Known limitations**
-* No cloud backup or sync: uninstalling the app or clearing its data erases all progress.
-* No edit/delete of transactions (a wrong entry cannot be undone because it already affected HP/monster; planned for later).
-* The daily quota, budget day boundaries, and HP regeneration rely on the device clock; changing the phone date can bypass them.
-* **Users set their own limits, so they can raise a limit to avoid a penalty.** This is a self-discipline app; there is no anti-cheat.
-* News content is English (`country=us`); the Quest tab needs internet and has no offline article cache.
-* `sqflite` targets Android/iOS only.
-* Categories are a fixed list of five (no custom categories).
-
-**Balance risks (tune in `game_rules.dart` after playtesting)**
-* 1 HP per Rp 1.000 of overage may feel too harsh or too lenient; at a Rp 50.000 limit, a Rp 100.000 meal costs 50 HP.
-* Level-down discards progress inside the current level; if testers find it demotivating, consider keeping a share of EXP.
-* Daily regen +25 means about 4 days to fully heal; adjust `dailyHpRegen` if the hero feels permanently weak or invincible.
-
-**Risks if the app is distributed to real users**
-* **NewsAPI free (Developer) plan is licensed for development only** and limited to 100 requests/day; real public use needs a paid plan or another news source.
-* **An API key passed via `--dart-define` is still embedded in the app binary** and can be extracted. A truly secure setup needs a small backend proxy (out of scope).
-* **Course rules:** earlier PRD versions forbade local databases. Confirm with the lecturer that `sqflite` is acceptable before submission.
-
-**Open decisions for the team**
-* Should a limit **increase** only take effect from the next day, to reduce "raise the limit to dodge the penalty" behavior?
-* Add `url_launcher` so users can open the full article in a browser (currently they read title/description and copy the link)?
-* Add a "Reset Data" action with confirmation in Profile?
-* Allow the hero name to be edited (currently seeded as "Pahlawan Hemat")?
+### 15.10. Release (P15)
+- [ ] Release build is signed and obfuscated; `version` bumped; applicationId matches Firebase.
+- [ ] Release build tested on a real device: normal network, slow network, airplane mode.
+- [ ] Distribution evidence prepared (App Distribution link, Play testing link, or APK/AAB) and approved by the lecturer.
+- [ ] README contains run steps, structure, task division; demo script covers the full end-to-end flow (§1.3).
 
 ---
 
-## 14. Suggested Build Order (deadline: mid-to-late December)
+## 16. Risks, Known Limitations & Open Decisions
 
-Work backwards from the deadline and keep the last 1–2 weeks as buffer for testing and the report.
+**Open decisions to confirm with the lecturer**
+* **Backend choice:** Firebase Auth + Firestore is used to satisfy "API/Firebase" and secure session requirements, alongside NewsAPI (REST) for Quest. Confirm this with the lecturer; if a custom REST backend (e.g. Laravel + Sanctum token + `flutter_secure_storage`) is required instead, only §5–§6 change (`GameStore` and all UI screens stay intact!).
+* **Store granularity:** one `GameStore` for the whole app is assumed (simple, matches the P12 layering). If the P12 slides show one store/ViewModel per feature and the rubric expects that, split `GameStore` into feature stores that share one repository; UI contracts and Firestore schema stay the same.
+* **Distribution path:** Play testing (12 testers × 14 days) vs Firebase App Distribution/APK. Start the Play process by early December if Play is mandatory.
+* **`go_router`** and the exact `data/` + `ui/` folder names are recommendations in the slides, not mandatory; confirm.
 
-| Phase | Scope | Priority |
+**Security & product risks**
+* **NewsAPI key in the app:** the P14 checklist says "no secrets in the app", but a key passed via `--dart-define` can be extracted from the APK. Options: (a) accept and document it as the reported security finding, with an alternative keyless news source; (b) a small proxy (e.g. Firebase Cloud Function, which requires a billing-enabled plan) that holds the key server-side. NewsAPI's free plan is also development-use only and limited to 100 requests/day.
+* **Client-computed game logic:** a modified client could write arbitrary HP/gold; Security Rules validate ownership and structure only. Acceptable for this assignment.
+* **Users can raise their own limits** to dodge penalties (self-discipline app). Optional rule: increases take effect the next day.
+* **Edit/delete does not roll back battle effects** (by design, to keep the game consistent).
+
+**Technical limitations**
+* One active device per account (last write wins); cached data of a previous account remains in the device cache after logout.
+* Daily quota, budget days, and HP regeneration depend on the device clock.
+* Reminder time zone fixed to WIB; exact alarms not used.
+* `country=us` news (English); the article list requires internet.
+* No in-app account deletion or password reset in the MVP (needed for Play publication; password reset is a P2 item).
+* Firestore Spark-plan quotas are ample for a class project but finite.
+
+**Balance risks (tune in `game_rules.dart` after playtesting):** 1 HP per Rp 1.000 of overage may be harsh; level-down discards progress inside the level; regeneration +25/day may feel too weak or too strong.
+
+---
+
+## 17. Build Order, Timeline & Team Division
+
+Deadline: mid-to-late December. Keep the last 1–2 weeks as buffer for testing, release, and the report.
+
+| Week | Scope | Slide milestone |
 |---|---|---|
-| 1 | Project setup, `pubspec`, models (§4), `game_rules.dart` (constants + pure functions), formatters, theme | P0 |
-| 2 | `database_helper.dart` (schema, seeding, `loadSnapshot`, `persistTurn`) + `MainNavigationScreen` shell with loading/error states | P0 |
-| 3 | Arena: `HeroStatus`, `MonsterDisplay`, `HpBar`, `AttackForm` with category selector; saving + expense callbacks with HP/level-down | P0 |
-| 4 | Profile: stats, financial summary, history; budget progress + `BudgetSettingsSheet` | P0 |
-| 5 | Quest: `NewsService`, `FutureBuilder`, `NewsCard`, reader sheet, claim logic (`persistArticleClaim`) | P0 |
-| 6 | Daily rollover + HP regeneration + app-resume refresh (§6.5), live budget hint in `AttackForm` | P1 |
-| 7 | Full acceptance run (§12), airplane-mode and kill-app tests, balance tuning, bug fixes | P0 |
-| 8 | Buffer, report, demo script (demo tip: start the demo with a limit you can exceed quickly, e.g. Makan Rp 20.000, to show the HP loss and level-down live) | — |
+| 1 | Firebase project, `flutter create`, `flutterfire configure`, theme (`light` + `dark`), `ResponsiveBody`, models, `game_rules.dart`, formatters, validators; navigable screens with sample state | **P13 deliverable** (UI + wireframes + task division) |
+| 2 | `AuthService`, `AuthGate`, Login/Register, error mapping | P14 |
+| 3 | `GameRepository` (watch/save), `GameStore` (`ChangeNotifier`) + startup flow, `MainNavigationScreen`, Arena core (saving, hero HP) | P14 |
+| 4 | Budget Survival: category input, overage, HP loss, level-down, Profile budgets, rollover/regen | P14 |
+| 5 | History + Detail + Edit + Delete/Undo; Security Rules + `firestore.rules` | P14 |
+| 6 | Quest (NewsAPI, reader sheet, claims), notifications + permission flow | P14 |
+| 7 | Responsive/performance pass, unit tests (`game_rules_test.dart`), security checklist, full acceptance run (§15), offline tests | P15 |
+| 8 | Signed obfuscated build, distribution, README, report, demo rehearsal, buffer | **P15 deliverable** |
 
-**Cut list if time runs short (in this order):** app-resume refresh → live budget hint preview → regeneration (replace with full heal on date change) → reading-gate countdown. Do **not** cut persistence, the write-through rule, or the budget/HP core.
+**Cut list if time runs short (in order):** `NavigationRail`/tablet extras → sync chip → app-resume refresh → live budget hint → undo-delete → reader-sheet countdown → regeneration (replace with full heal on date change). **Never cut:** auth, `GameStore` (`provider`), Firestore persistence, CRUD, budget/HP core, notification demo, release evidence.
+
+**Task division (fill in names; one Git branch per feature):**
+
+| Feature / area | Main files | Owner | Branch |
+|---|---|---|---|
+| Foundation (theme, models, rules, utils) | `core/*`, `models/*`, `widgets/*` | _TBD_ | `feat/foundation` |
+| F1 Auth | `services/auth_service.dart`, `screens/auth/*` | _TBD_ | `feat/auth` |
+| Data layer + Store + Shell | `services/game_repository.dart`, `state/game_store.dart`, `main_navigation_screen.dart` | _TBD_ | `feat/data-store` |
+| F2 Arena + F3 Budget | `screens/arena/*`, `screens/profile/*` | _TBD_ | `feat/arena-budget` |
+| F4 History & CRUD | `screens/history/*` | _TBD_ | `feat/history-crud` |
+| F5 Quest + Notifications | `screens/quest/*`, `services/news_service.dart`, `services/notification_service.dart` | _TBD_ | `feat/quest-notif` |
+| Release, Tests, README, report | `android/*`, `test/*`, `README.md` | _TBD_ | `feat/release` |
