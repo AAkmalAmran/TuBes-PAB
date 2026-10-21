@@ -1,0 +1,130 @@
+{
+  "meta": {
+    "project": "FinQuest: Pahlawan Finansial",
+    "source_of_truth_note": "Single source of truth for feature state. A feature is 'done' only when its evidence field records real verification (see AGENTS.md section 1.4).",
+    "status_values": ["todo", "in_progress", "blocked", "done"],
+    "open_decisions": [
+      "Backend for main-feature data and login: custom API or Firebase (decide per PRD, then update features auth-login and transaction-* accordingly)",
+      "Release distribution channel: Google Play testing track or lecturer-approved alternative"
+    ]
+  },
+  "features": [
+    {
+      "id": "project-foundation",
+      "priority": 1,
+      "title": "Project foundation",
+      "description": "Layered folder structure (models, services, providers, screens/widgets), provider + ChangeNotifier GameStore wiring, light and dark Material 3 theme, centralized Indonesian UI strings, example config for API keys.",
+      "verification": "flutter analyze clean, flutter test passes, app launches on emulator in light and dark theme",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "local-database",
+      "priority": 2,
+      "title": "Local SQLite database (version 2 schema)",
+      "description": "sqflite database with transactions (including category), hero (level, XP, HP), and budgets tables; onCreate and onUpgrade from version 1 to version 2 preserving data; money stored as integer rupiah.",
+      "verification": "Unit tests on temporary database including the v1 to v2 migration",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "game-engine",
+      "priority": 3,
+      "title": "Game rules engine",
+      "description": "XP gain, level thresholds, HP loss on overspend, level drop by one at 0 HP, all in the domain layer and covered by unit tests. Exact numbers follow PRD.md.",
+      "verification": "Unit tests for XP, HP loss, level drop at 0 HP",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "auth-login",
+      "priority": 4,
+      "title": "Login and secure session",
+      "description": "Login screen, token stored with secure storage, initial route decided from stored token, logout clears token, expired token returns to login with an Indonesian message.",
+      "verification": "Widget test for login screen; manual run: login, restart app stays logged in, logout, invalid token handled",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "transaction-list-detail",
+      "priority": 5,
+      "title": "Transaction list and detail",
+      "description": "List of transactions with loading, empty, and error states; detail screen for a selected transaction. Data goes through the API or Firebase per the PRD.",
+      "verification": "Widget tests for list and detail; manual run on emulator",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "transaction-add",
+      "priority": 6,
+      "title": "Add transaction",
+      "description": "Form with category, amount, and date; validation messages in Indonesian; saving awards XP and triggers the budget check.",
+      "verification": "Widget test for the form; manual run: add a transaction and see list, XP, and HP update",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "transaction-edit-delete",
+      "priority": 7,
+      "title": "Edit and delete transaction",
+      "description": "Edit an existing transaction and delete with confirmation; game state (HP, budget usage) stays consistent after edit or delete.",
+      "verification": "Widget tests for edit and delete; manual run on emulator",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "budget-limit-hp",
+      "priority": 8,
+      "title": "Daily spending limits per category",
+      "description": "User defines a daily limit per category (for example food Rp 50.000 per day); exceeding the limit reduces hero HP; at 0 HP the hero's level drops. Budgets stored in the budgets table.",
+      "verification": "Unit tests for overspend detection; manual run: set a limit, exceed it, observe HP loss",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "daily-mission-news",
+      "priority": 9,
+      "title": "Daily mission: read an article (NewsAPI)",
+      "description": "Fetch articles from NewsAPI through the service layer with timeouts and typed models; completing the mission awards XP once per day; NewsAPI key injected at build time, never committed; graceful offline message.",
+      "verification": "Service test with mocked http client; manual run online and offline",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "local-notification",
+      "priority": 10,
+      "title": "Local notification",
+      "description": "Local notification triggered by a meaningful event (for example daily mission reminder or budget warning), required by the final demo flow.",
+      "verification": "Manual run on emulator or device: notification appears; permission handling on Android 13+ checked",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "ui-states-polish",
+      "priority": 11,
+      "title": "Loading, empty, and error states across all screens",
+      "description": "Every screen handles loading, empty, and error states with short Indonesian messages; layouts checked on small and large phones and with larger text scale.",
+      "verification": "Manual checklist run on at least two screen sizes; recorded in claude-progress.md",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "release-build",
+      "priority": 12,
+      "title": "Signed, obfuscated release build and distribution",
+      "description": "Signed release build with --obfuscate and --split-debug-info, distributed through Google Play testing or a lecturer-approved alternative; signing config kept out of the repository.",
+      "verification": "Release build installed on a real device; login, full CRUD, and local notification verified",
+      "status": "todo",
+      "evidence": ""
+    },
+    {
+      "id": "demo-rehearsal",
+      "priority": 13,
+      "title": "Final demo rehearsal",
+      "description": "Full rehearsal of the rubric flow on the release build: login, list, detail, add, edit, delete, local notification.",
+      "verification": "Complete run without errors, recorded in claude-progress.md",
+      "status": "todo",
+      "evidence": ""
+    }
+  ]
+}
