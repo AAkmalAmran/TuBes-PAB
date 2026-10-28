@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'core/theme/app_theme.dart';
 import 'screens/auth/login_screen.dart';
 
+// Notifier pengatur mode terang/gelap global
+final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
+
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 
@@ -10,14 +15,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'FinQuest',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E7D32)),
-      ),
-      home: const LoginScreen(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (context, currentMode, _) {
+        return MaterialApp(
+          title: 'FinQuest',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: currentMode,
+          home: const LoginScreen(),
+        );
+      },
     );
   }
 }
